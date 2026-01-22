@@ -9,6 +9,7 @@ to enable powerful knowledge retrieval patterns.
 from typing import List, Optional, Tuple, Set, Dict
 import logging
 import math
+from datetime import datetime
 
 from .client import GraphitiClient
 from .models import Node, Edge
@@ -460,6 +461,183 @@ def get_related(
 
         logger.info(f"Found {len(results)} related nodes")
         return results
+
+    finally:
+        if should_disconnect:
+            client.disconnect()
+
+
+def query_temporal(
+    start: datetime,
+    end: datetime,
+    include_edges: bool = False,
+    client: Optional[GraphitiClient] = None
+) -> Dict[str, List]:
+    """
+    Query nodes and edges created or updated within a time range.
+
+    Retrieves all nodes (and optionally edges) that were created or updated
+    between the specified start and end timestamps. This enables temporal
+    analysis, historical queries, and activity tracking over time periods.
+
+    Args:
+        start: Start of the time range (inclusive)
+        end: End of the time range (inclusive)
+        include_edges: If True, also returns edges within the time range (default: False)
+        client: Optional GraphitiClient instance. If not provided, creates a new one.
+
+    Returns:
+        Dictionary with keys:
+        - "nodes": List of nodes created or updated within the time range
+        - "edges": List of edges created or updated within the time range (if include_edges=True)
+
+    Example:
+        >>> from datetime import datetime, timedelta
+        >>> end = datetime.now()
+        >>> start = end - timedelta(days=7)
+        >>> results = query_temporal(start, end)
+        >>> print(f"Found {len(results['nodes'])} nodes in the last week")
+
+        >>> # Include edges in the results
+        >>> results = query_temporal(start, end, include_edges=True)
+        >>> print(f"Found {len(results['nodes'])} nodes and {len(results['edges'])} edges")
+
+    Notes:
+        - A node/edge is included if either created_at OR updated_at falls within the range
+        - Time range is inclusive on both ends
+        - Results are sorted by created_at timestamp (newest first)
+        - Returns empty lists if no nodes/edges exist in the time range
+    """
+    # Create or use provided client
+    should_disconnect = False
+    if client is None:
+        client = GraphitiClient()
+        client.connect()
+        should_disconnect = True
+
+    try:
+        logger.info(f"Querying temporal range: {start} to {end} (include_edges={include_edges})")
+
+        # Filter nodes by timestamp
+        matching_nodes: List[Node] = []
+
+        for node in client._nodes.values():
+            # Check if node falls within the time range (created or updated)
+            if (start <= node.created_at <= end) or (start <= node.updated_at <= end):
+                matching_nodes.append(node)
+
+        # Sort by created_at (newest first)
+        matching_nodes.sort(key=lambda n: n.created_at, reverse=True)
+
+        logger.info(f"Found {len(matching_nodes)} nodes in temporal range")
+
+        # Build result dictionary
+        result: Dict[str, List] = {
+            "nodes": matching_nodes,
+            "edges": []
+        }
+
+        # Optionally include edges
+        if include_edges:
+            matching_edges: List[Edge] = []
+
+            for edge in client._edges.values():
+                # Check if edge falls within the time range (created or updated)
+                if (start <= edge.created_at <= end) or (start <= edge.updated_at <= end):
+                    matching_edges.append(edge)
+
+            # Sort by created_at (newest first)
+            matching_edges.sort(key=lambda e: e.created_at, reverse=True)
+
+            result["edges"] = matching_edges
+            logger.info(f"Found {len(matching_edges)} edges in temporal range")
+
+        return result
+
+    finally:
+        if should_disconnect:
+            client.disconnect()
+
+
+def query_temporal_nodes(
+    start: datetime,
+    end: datetime,
+    node_type: Optional[str] = None,
+    client: Optional[GraphitiClient] = None
+) -> List[Node]:
+    """
+    Query nodes within a time range, optionally filtered by node type.
+
+    A convenience function that retrieves only nodes (not edges) within a
+    time range, with optional filtering by node type. Useful for analyzing
+    specific types of activities over time.
+
+    Args:
+        start: Start of the time range (inclusive)
+        end: End of the time range (inclusive)
+        node_type: Optional node type filter (e.g., 'decision', 'task', 'session').
+                   If None, returns all node types.
+        client: Optional GraphitiClient instance. If not provided, creates a new one.
+
+    Returns:
+        List of nodes created or updated within the time range, sorted by
+        created_at timestamp (newest first).
+
+    Example:
+        >>> from datetime import datetime, timedelta
+        >>> end = datetime.now()
+        >>> start = end - timedelta(hours=24)
+        >>>
+        >>> # Get all decisions made in the last 24 hours
+        >>> decisions = query_temporal_nodes(start, end, node_type="decision")
+        >>> print(f"Made {len(decisions)} decisions today")
+        >>>
+        >>> # Get all activity in the last hour
+        >>> recent = query_temporal_nodes(
+        ...     datetime.now() - timedelta(hours=1),
+        ...     datetime.now()
+        ... )
+
+    Notes:
+        - A node is included if either created_at OR updated_at falls within the range
+        - Time range is inclusive on both ends
+        - Results are sorted by created_at timestamp (newest first)
+        - Returns empty list if no matching nodes exist
+    """
+    # Create or use provided client
+    should_disconnect = False
+    if client is None:
+        client = GraphitiClient()
+        client.connect()
+        should_disconnect = True
+
+    try:
+        logger.info(
+            f"Querying temporal nodes: {start} to {end}, "
+            f"node_type={node_type}"
+        )
+
+        # Filter nodes by timestamp and optionally by type
+        matching_nodes: List[Node] = []
+
+        for node in client._nodes.values():
+            # Check if node falls within the time range (created or updated)
+            in_time_range = (start <= node.created_at <= end) or (start <= node.updated_at <= end)
+
+            if not in_time_range:
+                continue
+
+            # Apply node type filter if specified
+            if node_type is not None and node.type != node_type:
+                continue
+
+            matching_nodes.append(node)
+
+        # Sort by created_at (newest first)
+        matching_nodes.sort(key=lambda n: n.created_at, reverse=True)
+
+        logger.info(f"Found {len(matching_nodes)} nodes in temporal range")
+        return matching_nodes
 
     finally:
         if should_disconnect:
