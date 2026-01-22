@@ -136,13 +136,22 @@ def cli(
             cmd = cli.get_command(ctx, first_word)
             if cmd:
                 # Forward to the subcommand with remaining arguments
-                # Re-parse args through Click's standard mechanism
                 args = list(query[1:])
-                with ctx.scope() as sub_ctx:
-                    sub_ctx.info_name = first_word
-                    sub_ctx.parent = ctx
+
+                # Handle --help specially to avoid recursion
+                if "--help" in args or "-h" in args:
+                    # Create a help context and print help for the subcommand
+                    with click.Context(cmd, info_name=first_word, parent=ctx) as help_ctx:
+                        click.echo(cmd.get_help(help_ctx))
+                    return
+
+                # Create context and invoke the subcommand
+                try:
                     with cmd.make_context(first_word, args, parent=ctx) as sub_cmd_ctx:
                         return cmd.invoke(sub_cmd_ctx)
+                except click.exceptions.Exit:
+                    # Click raised Exit (e.g., for --help), this is normal
+                    return
             else:
                 # One-shot query mode: aios 'why did we choose X?'
                 query_text = " ".join(query)
