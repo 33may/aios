@@ -8,6 +8,15 @@ built on Graphiti + LadybugDB.
 from .client import GraphitiClient
 from .config import GraphitiConfig
 from .models import Edge, Node
+from .queries import search_semantic
 from .schema import EdgeType, NodeType
 
-__all__ = ["NodeType", "EdgeType", "Node", "Edge", "GraphitiClient", "GraphitiConfig"]
+__all__ = [
+    "NodeType",
+    "EdgeType",
+    "Node",
+    "Edge",
+    "GraphitiClient",
+    "GraphitiConfig",
+    "search_semantic",
+]
