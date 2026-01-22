@@ -166,6 +166,53 @@ def _get_task_checkbox(node: Node) -> str:
         return "[ ]"
 
 
+def _get_source_attribution(node: Node) -> Optional[str]:
+    """
+    Extract source attribution from node metadata.
+
+    Source attribution indicates where the knowledge originated from,
+    such as a session, project, file, or other context.
+
+    Args:
+        node: The Node to extract source from
+
+    Returns:
+        Source attribution string, or None if no source info available
+    """
+    if not node.metadata:
+        return None
+
+    # Priority order for source attribution
+    source_fields = [
+        ("session_id", "session"),
+        ("session", "session"),
+        ("project_id", "project"),
+        ("project", "project"),
+        ("source_file", "file"),
+        ("source", None),  # Use value directly
+        ("file", "file"),
+        ("origin", None),  # Use value directly
+    ]
+
+    for field, prefix in source_fields:
+        if field in node.metadata:
+            value = node.metadata[field]
+            if value:
+                if prefix:
+                    return f"{prefix}:{value}"
+                return str(value)
+
+    return None
+
+
+def _format_source_line(node: Node) -> str:
+    """Format source attribution as a display line."""
+    source = _get_source_attribution(node)
+    if source:
+        return f"   Source: {source}"
+    return ""
+
+
 # --- Text format implementations ---
 
 
@@ -174,7 +221,7 @@ def _format_search_results_text(
     show_score: bool,
     verbose: bool
 ) -> str:
-    """Format search results as plain text."""
+    """Format search results as plain text with source attribution."""
     lines = []
     lines.append(f"Found {len(results)} result(s):\n")
 
@@ -185,12 +232,21 @@ def _format_search_results_text(
 
         lines.append(f"{i}. {type_str} {content}{score_str}")
 
+        # Always show source attribution when available
+        source_line = _format_source_line(node)
+        if source_line:
+            lines.append(source_line)
+
         if verbose:
             lines.append(f"   UUID: {node.uuid}")
             lines.append(f"   Created: {_format_timestamp(node.created_at)}")
             if node.metadata:
+                # Show metadata fields except those already shown as source
+                source_fields = {"session_id", "session", "project_id", "project",
+                               "source_file", "source", "file", "origin"}
                 for key, value in node.metadata.items():
-                    lines.append(f"   {key}: {value}")
+                    if key not in source_fields:
+                        lines.append(f"   {key}: {value}")
         lines.append("")
 
     return "\n".join(lines).strip()
@@ -283,7 +339,7 @@ def _format_tasks_json(tasks: List[Node], verbose: bool) -> str:
 
 
 def _node_to_dict(node: Node, verbose: bool) -> dict:
-    """Convert node to dictionary for JSON serialization."""
+    """Convert node to dictionary for JSON serialization with source attribution."""
     data = {
         "type": node.type,
         "content": node.content,
@@ -291,6 +347,10 @@ def _node_to_dict(node: Node, verbose: bool) -> dict:
         "created_at": node.created_at.isoformat() if node.created_at else None,
         "updated_at": node.updated_at.isoformat() if node.updated_at else None,
     }
+    # Always include source attribution when available
+    source = _get_source_attribution(node)
+    if source:
+        data["source"] = source
     if verbose and node.metadata:
         data["metadata"] = node.metadata
     return data
@@ -304,19 +364,40 @@ def _format_search_results_table(
     show_score: bool,
     verbose: bool
 ) -> str:
-    """Format search results as ASCII table."""
+    """Format search results as ASCII table with source attribution."""
+    # Check if any results have source attribution
+    has_source = any(_get_source_attribution(node) for node, _ in results)
+
     if show_score:
-        headers = ["#", "Type", "Content", "Score"]
-        rows = []
-        for i, (node, score) in enumerate(results, 1):
-            content = _truncate_content(node.content, 50)
-            rows.append([str(i), node.type, content, f"{score:.2f}"])
+        if has_source:
+            headers = ["#", "Type", "Content", "Source", "Score"]
+            rows = []
+            for i, (node, score) in enumerate(results, 1):
+                content = _truncate_content(node.content, 40)
+                source = _get_source_attribution(node) or "-"
+                source = _truncate_content(source, 15)
+                rows.append([str(i), node.type, content, source, f"{score:.2f}"])
+        else:
+            headers = ["#", "Type", "Content", "Score"]
+            rows = []
+            for i, (node, score) in enumerate(results, 1):
+                content = _truncate_content(node.content, 50)
+                rows.append([str(i), node.type, content, f"{score:.2f}"])
     else:
-        headers = ["#", "Type", "Content"]
-        rows = []
-        for i, (node, _score) in enumerate(results, 1):
-            content = _truncate_content(node.content, 60)
-            rows.append([str(i), node.type, content])
+        if has_source:
+            headers = ["#", "Type", "Content", "Source"]
+            rows = []
+            for i, (node, _score) in enumerate(results, 1):
+                content = _truncate_content(node.content, 45)
+                source = _get_source_attribution(node) or "-"
+                source = _truncate_content(source, 15)
+                rows.append([str(i), node.type, content, source])
+        else:
+            headers = ["#", "Type", "Content"]
+            rows = []
+            for i, (node, _score) in enumerate(results, 1):
+                content = _truncate_content(node.content, 60)
+                rows.append([str(i), node.type, content])
 
     return _build_ascii_table(headers, rows)
 
