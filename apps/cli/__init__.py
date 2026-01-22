@@ -6,4 +6,8 @@ Ask questions like 'Why did we choose ROS2?' or 'What tasks are blocked?'
 and get relevant answers with source attribution.
 """
 
-__all__: list[str] = []
+from .main import main
+
+__all__ = [
+    "main",
+]
