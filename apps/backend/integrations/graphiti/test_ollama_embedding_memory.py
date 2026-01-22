@@ -434,6 +434,201 @@ def test_retrieve_context_metadata() -> bool:
     return success
 
 
+def test_semantic_accuracy() -> bool:
+    """
+    Test semantic search accuracy with conceptual matching.
+
+    This test validates that semantic search finds conceptually related items,
+    not just keyword matches. For example, a search for "login security" should
+    return results about OAuth authentication and JWT tokens, even though those
+    exact keywords don't appear in the query.
+
+    Per spec requirement:
+        Query "authentication best practices" returns results about OAuth, JWT,
+        session management even if those exact words aren't in the query.
+
+    Returns:
+        True if all tests pass, False otherwise
+    """
+    print_header("Test: Semantic Search Accuracy (Conceptual Matching)")
+
+    try:
+        from integrations.graphiti.providers.ollama_embedder import (
+            OllamaEmbedder,
+        )
+    except ImportError as e:
+        print_result("Import", f"FAILED: {e}", False)
+        return False
+
+    # Step 1: Create embedder
+    print_step(1, "Creating embedder for semantic accuracy test")
+
+    try:
+        embedder = OllamaEmbedder()
+        print_result("Create embedder", f"model={embedder.config.model}", True)
+    except Exception as e:
+        print_result("Create embedder", f"FAILED: {e}", False)
+        return False
+
+    # Step 2: Create semantically diverse document set
+    print_step(2, "Creating semantically diverse document set")
+
+    # Documents are deliberately written without query keywords to test conceptual matching
+    documents = [
+        # Authentication domain (should match "login security" queries)
+        {"id": "auth-1", "content": "OAuth 2.0 authorization flow with Google and GitHub identity providers",
+         "domain": "authentication"},
+        {"id": "auth-2", "content": "JWT token generation, validation, and refresh mechanisms for API access",
+         "domain": "authentication"},
+        {"id": "auth-3", "content": "Session management with secure cookies and CSRF protection",
+         "domain": "authentication"},
+        # Unrelated domains (should NOT match "login security" queries)
+        {"id": "db-1", "content": "PostgreSQL database connection pooling and query optimization techniques",
+         "domain": "database"},
+        {"id": "ui-1", "content": "React component state management using hooks and context API",
+         "domain": "frontend"},
+        {"id": "deploy-1", "content": "Docker container orchestration with Kubernetes pod scheduling",
+         "domain": "devops"},
+    ]
+
+    doc_embeddings = []
+    for doc in documents:
+        embedding = embedder.embed(doc["content"])
+        doc_embeddings.append({**doc, "embedding": embedding})
+        print_info(f"Embedded [{doc['domain']}]: {doc['content'][:45]}...")
+
+    print_result("Document embeddings", f"Created {len(doc_embeddings)} embeddings", True)
+
+    # Step 3: Test conceptual queries that don't share keywords with documents
+    print_step(3, "Testing semantic conceptual matching")
+
+    # Queries designed to test conceptual (not keyword) matching
+    # Each query should match documents by concept, not by word overlap
+    semantic_test_cases = [
+        {
+            "query": "login security",  # Should match OAuth, JWT, session docs
+            "expected_domains": ["authentication"],
+            "description": "Login/security concepts should match auth docs",
+        },
+        {
+            "query": "user authentication best practices",  # Should match all auth docs
+            "expected_domains": ["authentication"],
+            "description": "Auth best practices should match OAuth/JWT/session",
+        },
+        {
+            "query": "storing data efficiently",  # Should match database doc
+            "expected_domains": ["database"],
+            "description": "Data storage should match database docs",
+        },
+        {
+            "query": "building user interfaces",  # Should match React doc
+            "expected_domains": ["frontend"],
+            "description": "UI building should match frontend docs",
+        },
+    ]
+
+    semantic_success = True
+    for test_case in semantic_test_cases:
+        query = test_case["query"]
+        expected_domains = test_case["expected_domains"]
+        description = test_case["description"]
+
+        query_embedding = embedder.embed(query)
+
+        # Calculate similarities
+        similarities = []
+        for doc in doc_embeddings:
+            sim = cosine_similarity(query_embedding, doc["embedding"])
+            similarities.append((doc["id"], doc["domain"], sim, doc["content"]))
+
+        # Sort by similarity
+        similarities.sort(key=lambda x: x[2], reverse=True)
+
+        # Get top result
+        top_id, top_domain, top_sim, top_content = similarities[0]
+
+        print(f"\n  Semantic Query: '{query}'")
+        print(f"  Expected domain: {expected_domains}")
+        print(f"  Top results:")
+        for i, (doc_id, domain, sim, content) in enumerate(similarities[:3]):
+            marker = "✓" if domain in expected_domains else "✗"
+            print(f"    {i+1}. [{marker}] {domain}: {sim:.4f} - {content[:40]}...")
+
+        # Verify top result is from expected domain
+        if top_domain in expected_domains:
+            print_result(f"Semantic match '{query[:25]}...'", f"{description}", True)
+        else:
+            print_result(
+                f"Semantic match '{query[:25]}...'",
+                f"Expected {expected_domains}, got {top_domain}",
+                False
+            )
+            semantic_success = False
+
+    # Step 4: Test that unrelated queries don't match authentication docs
+    print_step(4, "Testing semantic distinction (negative cases)")
+
+    negative_test_cases = [
+        {
+            "query": "cooking recipes and meal preparation",  # Completely unrelated
+            "should_not_match": ["authentication"],
+            "description": "Cooking should not highly match auth docs",
+        },
+        {
+            "query": "weather forecast predictions",  # Completely unrelated
+            "should_not_match": ["authentication"],
+            "description": "Weather should not highly match auth docs",
+        },
+    ]
+
+    for test_case in negative_test_cases:
+        query = test_case["query"]
+        should_not_match = test_case["should_not_match"]
+
+        query_embedding = embedder.embed(query)
+
+        # Calculate similarities
+        similarities = []
+        for doc in doc_embeddings:
+            sim = cosine_similarity(query_embedding, doc["embedding"])
+            similarities.append((doc["id"], doc["domain"], sim))
+
+        # Sort by similarity
+        similarities.sort(key=lambda x: x[2], reverse=True)
+
+        top_domain = similarities[0][1]
+        top_sim = similarities[0][2]
+
+        print(f"\n  Negative Query: '{query}'")
+        print(f"  Top result: {top_domain} (sim={top_sim:.4f})")
+
+        # For unrelated queries, we just verify the similarity scores are lower
+        # and ideally not from the forbidden domains
+        if top_domain in should_not_match and top_sim > 0.7:
+            print_result(
+                f"Semantic distinction '{query[:20]}...'",
+                f"Unexpectedly matched {top_domain} with high score {top_sim:.2f}",
+                False
+            )
+            # This is a soft failure - embedding models may still find some similarity
+            print_info("Note: This may indicate the embedding model finds weak semantic connections")
+        else:
+            print_result(
+                f"Semantic distinction '{query[:20]}...'",
+                f"Correctly distinguished (top: {top_domain}, sim={top_sim:.2f})",
+                True
+            )
+
+    # Step 5: Summary
+    print()
+    print_result(
+        "Semantic Search Accuracy",
+        "Conceptual matching verified" if semantic_success else "Some semantic tests failed",
+        semantic_success
+    )
+    return semantic_success
+
+
 def test_full_cycle() -> bool:
     """
     Test the complete embedding cycle including semantic search.
@@ -541,9 +736,9 @@ def main():
     parser = argparse.ArgumentParser(description="Test Ollama Embedding Integration")
     parser.add_argument(
         "--test",
-        choices=["all", "embeddings", "full-cycle", "retrieve"],
+        choices=["all", "embeddings", "full-cycle", "retrieve", "semantic"],
         default="all",
-        help="Which test to run (retrieve tests context metadata in search results)",
+        help="Which test to run (retrieve tests context metadata, semantic tests conceptual matching)",
     )
 
     args = parser.parse_args()
@@ -572,6 +767,9 @@ def main():
 
     if args.test in ["all", "retrieve"]:
         results["retrieve"] = test_retrieve_context_metadata()
+
+    if args.test in ["all", "semantic", "full-cycle"]:
+        results["semantic"] = test_semantic_accuracy()
 
     if args.test in ["all", "full-cycle"]:
         results["full-cycle"] = test_full_cycle()
