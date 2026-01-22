@@ -75,3 +75,17 @@ class EdgeType(str, Enum):
     # Temporal edges
     PRECEDED_BY = "preceded_by"
     """Sequential ordering (this node came after another)"""
+
+
+# Context Metadata Field Constants
+# These field names are used consistently across search results
+# to provide context about where and when knowledge was captured.
+
+METADATA_SOURCE_FILE = "source_file"
+"""The file path where the knowledge was captured or originated from"""
+
+METADATA_CAPTURED_AT = "captured_at"
+"""The timestamp when the knowledge was captured (ISO 8601 format)"""
+
+METADATA_EPISODE_TYPE = "episode_type"
+"""The type of episode/event that captured this knowledge (e.g., 'session', 'task', 'discovery')"""
