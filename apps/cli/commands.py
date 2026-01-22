@@ -434,6 +434,239 @@ def cmd_decisions(handler: CommandHandler, args: str) -> str:
 
 
 @register_command(
+    "search",
+    "Search the knowledge graph with natural language",
+    "/search <query> [--limit N] [--verbose]",
+    aliases=["s", "find"]
+)
+def cmd_search(handler: CommandHandler, args: str) -> str:
+    """
+    Search the knowledge graph with a natural language query.
+
+    Performs semantic search to find relevant knowledge nodes based on
+    the query text. Results are ranked by relevance score.
+
+    Options:
+        --limit N, -l N: Limit to N results (default: 10)
+        --verbose, -v: Show detailed information for each result
+        --all, -a: Search across all projects (ignore project scope)
+    """
+    args_lower = args.lower()
+    verbose = "--verbose" in args_lower or "-v" in args_lower
+    show_all = "--all" in args_lower or "-a" in args_lower
+
+    # Parse limit option
+    limit = handler.config.default_limit or 10
+    parts = args.split()
+    for i, part in enumerate(parts):
+        if part in ("--limit", "-l") and i + 1 < len(parts):
+            try:
+                limit = int(parts[i + 1])
+            except ValueError:
+                pass
+
+    # Extract the query text (remove flags)
+    query_parts = []
+    skip_next = False
+    for part in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if part in ("--verbose", "-v", "--all", "-a"):
+            continue
+        if part in ("--limit", "-l"):
+            skip_next = True
+            continue
+        query_parts.append(part)
+
+    query = " ".join(query_parts).strip()
+
+    if not query:
+        return "Error: Please provide a search query.\nUsage: /search <query> [--limit N] [--verbose]"
+
+    try:
+        # Use project-scoped search if project is detected and not showing all
+        if not show_all and handler.project_id:
+            results = handler.query_engine.search_in_project(
+                project_id=handler.project_id,
+                query=query,
+                limit=limit
+            )
+        else:
+            results = handler.query_engine.search(
+                query=query,
+                limit=limit
+            )
+
+        # Format and return results
+        output_format = handler.config.output_format
+        return formatters.format_search_results(
+            results,
+            output_format=output_format,
+            show_score=True,
+            verbose=verbose
+        )
+
+    except Exception as e:
+        logger.error(f"Error performing search: {e}")
+        return f"Error performing search: {str(e)}"
+
+
+@register_command(
+    "project",
+    "Show or set the current project context",
+    "/project [name|--detect|--clear]",
+    aliases=["proj", "p"]
+)
+def cmd_project(handler: CommandHandler, args: str) -> str:
+    """
+    Show or manage the current project context.
+
+    Without arguments, shows the current project information.
+
+    Options:
+        --detect, -d: Force re-detection of the current project
+        --clear, -c: Clear the current project context
+        <name>: Set the project to the specified name/ID
+    """
+    args_stripped = args.strip()
+    args_lower = args_stripped.lower()
+
+    # Handle --clear flag
+    if args_lower in ("--clear", "-c"):
+        handler._project_info = None
+        handler.config.project_id = None
+        return "Project context cleared."
+
+    # Handle --detect flag
+    if args_lower in ("--detect", "-d"):
+        handler._project_info = None  # Reset cached project
+        handler._auto_detect_project = True
+        project_info = handler.project_info
+
+        if project_info:
+            lines = [
+                "Project detected:",
+                f"  Name: {project_info.name}",
+                f"  ID: {project_info.project_id}",
+                f"  Path: {project_info.path}",
+            ]
+            markers = []
+            if project_info.has_git:
+                markers.append(".git")
+            if project_info.has_aios:
+                markers.append(".aios")
+            if markers:
+                lines.append(f"  Markers: {', '.join(markers)}")
+            return "\n".join(lines)
+        else:
+            return "No project detected in current directory."
+
+    # Handle setting a project by name/ID
+    if args_stripped and args_stripped not in ("--detect", "-d", "--clear", "-c"):
+        # Set explicit project ID
+        handler.config.project_id = args_stripped
+        return f"Project set to: {args_stripped}"
+
+    # Default: show current project information
+    project_info = handler.project_info
+    project_id = handler.project_id
+
+    if project_id or project_info:
+        lines = ["Current project:"]
+
+        if handler.config.project_id:
+            lines.append(f"  ID (explicit): {handler.config.project_id}")
+        elif project_info:
+            lines.append(f"  Name: {project_info.name}")
+            lines.append(f"  ID: {project_info.project_id}")
+            lines.append(f"  Path: {project_info.path}")
+            markers = []
+            if project_info.has_git:
+                markers.append(".git")
+            if project_info.has_aios:
+                markers.append(".aios")
+            if markers:
+                lines.append(f"  Markers: {', '.join(markers)}")
+            lines.append("  Source: auto-detected")
+
+        return "\n".join(lines)
+    else:
+        return "No project context set.\nUse /project --detect to auto-detect or /project <name> to set manually."
+
+
+@register_command(
+    "status",
+    "Show CLI status and configuration",
+    "/status [--verbose]",
+    aliases=["stat"]
+)
+def cmd_status(handler: CommandHandler, args: str) -> str:
+    """
+    Show the current CLI status and configuration.
+
+    Displays information about the CLI configuration, project context,
+    and connection status to the knowledge graph backend.
+
+    Options:
+        --verbose, -v: Show detailed configuration information
+    """
+    args_lower = args.lower()
+    verbose = "--verbose" in args_lower or "-v" in args_lower
+
+    lines = ["CLI Status:", ""]
+
+    # Project information
+    lines.append("Project:")
+    project_info = handler.project_info
+    project_id = handler.project_id
+
+    if handler.config.project_id:
+        lines.append(f"  ID: {handler.config.project_id} (explicit)")
+    elif project_info:
+        lines.append(f"  Name: {project_info.name}")
+        lines.append(f"  ID: {project_info.project_id}")
+        lines.append(f"  Path: {project_info.path}")
+    else:
+        lines.append("  Not set (use /project to configure)")
+
+    lines.append("")
+
+    # Configuration
+    lines.append("Configuration:")
+    lines.append(f"  Output format: {handler.config.output_format}")
+    lines.append(f"  Default limit: {handler.config.default_limit}")
+    lines.append(f"  Auto-detect project: {handler.config.auto_detect_project}")
+
+    if verbose:
+        lines.append(f"  Backend URL: {handler.config.backend_url}")
+        lines.append(f"  Backend port: {handler.config.backend_port}")
+        lines.append(f"  Timeout: {handler.config.timeout}s")
+
+    lines.append("")
+
+    # Backend connection status
+    lines.append("Backend:")
+    try:
+        # Check if query engine is connected
+        if handler.query_engine._client is not None:
+            lines.append("  Status: Connected")
+        else:
+            lines.append("  Status: Not connected (will connect on first query)")
+    except Exception:
+        lines.append("  Status: Unknown")
+
+    lines.append("")
+
+    # Command summary
+    lines.append("Commands:")
+    lines.append(f"  Registered: {len(set(cmd.name for cmd in COMMANDS.values()))}")
+    lines.append("  Use /help to see available commands")
+
+    return "\n".join(lines)
+
+
+@register_command(
     "recent",
     "Show recent activity from the knowledge graph",
     "/recent [--limit N] [--verbose]",
