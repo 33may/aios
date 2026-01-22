@@ -5,6 +5,7 @@ This module provides the core schema and client for the AIOS knowledge graph,
 built on Graphiti + LadybugDB.
 """
 
-from .schema import NodeType, EdgeType
+from .models import Edge, Node
+from .schema import EdgeType, NodeType
 
-__all__ = ["NodeType", "EdgeType"]
+__all__ = ["NodeType", "EdgeType", "Node", "Edge"]
