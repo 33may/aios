@@ -9,10 +9,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 import logging
 
+from datetime import datetime, timedelta
+
 from apps.cli.config import CLIConfig
 from apps.cli.query_engine import QueryEngine
 from apps.cli.project_detector import detect_project, detect_project_id, ProjectInfo
 from apps.cli import formatters
+from apps.backend.integrations.graphiti import queries
 
 logger = logging.getLogger(__name__)
 
@@ -334,3 +337,159 @@ def cmd_help(handler: CommandHandler, args: str) -> str:
     lines.append("Use /help <command> for detailed information about a command.")
 
     return "\n".join(lines)
+
+
+@register_command(
+    "tasks",
+    "List tasks from the knowledge graph",
+    "/tasks [--all] [--verbose]",
+    aliases=["t"]
+)
+def cmd_tasks(handler: CommandHandler, args: str) -> str:
+    """
+    List tasks from the knowledge graph.
+
+    By default shows tasks from the current project scope.
+    Use --all to show tasks from all projects.
+    Use --verbose for detailed task information.
+    """
+    args_lower = args.lower()
+    show_all = "--all" in args_lower or "-a" in args_lower
+    verbose = "--verbose" in args_lower or "-v" in args_lower
+
+    try:
+        # Determine time range for tasks (default: last 30 days)
+        end = datetime.now()
+        start = end - timedelta(days=30)
+
+        # Get tasks using the queries module
+        tasks = queries.query_temporal_nodes(
+            start=start,
+            end=end,
+            node_type="task",
+            client=handler.query_engine._client
+        )
+
+        # Filter by project if not showing all and project is detected
+        if not show_all and handler.project_id:
+            tasks = [
+                task for task in tasks
+                if task.metadata and task.metadata.get("project_id") == handler.project_id
+            ]
+
+        # Format and return results
+        output_format = handler.config.output_format
+        return formatters.format_tasks(tasks, output_format=output_format, verbose=verbose)
+
+    except Exception as e:
+        logger.error(f"Error listing tasks: {e}")
+        return f"Error listing tasks: {str(e)}"
+
+
+@register_command(
+    "decisions",
+    "List decisions from the knowledge graph",
+    "/decisions [--all] [--verbose]",
+    aliases=["d"]
+)
+def cmd_decisions(handler: CommandHandler, args: str) -> str:
+    """
+    List decisions from the knowledge graph.
+
+    By default shows decisions from the current project scope.
+    Use --all to show decisions from all projects.
+    Use --verbose for detailed decision information including rationale.
+    """
+    args_lower = args.lower()
+    show_all = "--all" in args_lower or "-a" in args_lower
+    verbose = "--verbose" in args_lower or "-v" in args_lower
+
+    try:
+        # Determine time range for decisions (default: last 90 days)
+        end = datetime.now()
+        start = end - timedelta(days=90)
+
+        # Get decisions using the queries module
+        decisions = queries.query_temporal_nodes(
+            start=start,
+            end=end,
+            node_type="decision",
+            client=handler.query_engine._client
+        )
+
+        # Filter by project if not showing all and project is detected
+        if not show_all and handler.project_id:
+            decisions = [
+                decision for decision in decisions
+                if decision.metadata and decision.metadata.get("project_id") == handler.project_id
+            ]
+
+        # Format and return results
+        output_format = handler.config.output_format
+        return formatters.format_decisions(decisions, output_format=output_format, verbose=verbose)
+
+    except Exception as e:
+        logger.error(f"Error listing decisions: {e}")
+        return f"Error listing decisions: {str(e)}"
+
+
+@register_command(
+    "recent",
+    "Show recent activity from the knowledge graph",
+    "/recent [--limit N] [--verbose]",
+    aliases=["r"]
+)
+def cmd_recent(handler: CommandHandler, args: str) -> str:
+    """
+    Show recent activity from the knowledge graph.
+
+    Lists recent items of all types (tasks, decisions, sessions, etc.)
+    sorted by creation time.
+
+    Options:
+        --limit N, -l N: Limit to N items (default: 10)
+        --verbose, -v: Show detailed information for each item
+    """
+    args_lower = args.lower()
+    verbose = "--verbose" in args_lower or "-v" in args_lower
+
+    # Parse limit option
+    limit = 10  # default
+    parts = args.split()
+    for i, part in enumerate(parts):
+        if part in ("--limit", "-l") and i + 1 < len(parts):
+            try:
+                limit = int(parts[i + 1])
+            except ValueError:
+                pass
+
+    try:
+        # Determine time range for recent items (default: last 7 days)
+        end = datetime.now()
+        start = end - timedelta(days=7)
+
+        # Get all recent nodes using the queries module
+        items = queries.query_temporal_nodes(
+            start=start,
+            end=end,
+            node_type=None,  # All types
+            client=handler.query_engine._client
+        )
+
+        # Filter by project if project is detected
+        if handler.project_id:
+            items = [
+                item for item in items
+                if item.metadata and item.metadata.get("project_id") == handler.project_id
+            ]
+
+        # Apply limit
+        items = items[:limit]
+
+        # Format and return results
+        output_format = handler.config.output_format
+        return formatters.format_recent(items, output_format=output_format, verbose=verbose)
+
+    except Exception as e:
+        logger.error(f"Error showing recent activity: {e}")
+        return f"Error showing recent activity: {str(e)}"
