@@ -40,6 +40,7 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 @click.group(invoke_without_command=True)
+@click.argument("query", nargs=-1, required=False)
 @click.option(
     "--project", "-p",
     default=None,
@@ -73,6 +74,7 @@ def setup_logging(verbose: bool = False) -> None:
 @click.pass_context
 def cli(
     ctx: click.Context,
+    query: tuple,
     project: Optional[str],
     output_format: Optional[str],
     verbose: bool,
@@ -126,9 +128,29 @@ def cli(
     )
     ctx.obj["handler"] = handler
 
-    # If no subcommand provided, show help
+    # Handle one-shot query mode or show help
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        if query:
+            # Check if the first argument is a known subcommand
+            first_word = query[0]
+            cmd = cli.get_command(ctx, first_word)
+            if cmd:
+                # Forward to the subcommand with remaining arguments
+                # Re-parse args through Click's standard mechanism
+                args = list(query[1:])
+                with ctx.scope() as sub_ctx:
+                    sub_ctx.info_name = first_word
+                    sub_ctx.parent = ctx
+                    with cmd.make_context(first_word, args, parent=ctx) as sub_cmd_ctx:
+                        return cmd.invoke(sub_cmd_ctx)
+            else:
+                # One-shot query mode: aios 'why did we choose X?'
+                query_text = " ".join(query)
+                result = handler.execute(f"/search {query_text}")
+                click.echo(result)
+        else:
+            # No query provided, show help
+            click.echo(ctx.get_help())
 
 
 @cli.command("query")
