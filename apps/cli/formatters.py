@@ -122,6 +122,88 @@ def format_tasks(
         return _format_tasks_text(tasks, verbose)
 
 
+def format_decisions(
+    decisions: List[Node],
+    output_format: str = "text",
+    verbose: bool = False
+) -> str:
+    """
+    Format a list of decision nodes for display.
+
+    Renders decision nodes with their rationale, context, and metadata
+    in a format optimized for decision history.
+
+    Args:
+        decisions: List of decision Node objects
+        output_format: Output format ("text", "json", or "table")
+        verbose: Whether to show detailed decision information
+
+    Returns:
+        Formatted string representation of the decisions.
+
+    Example:
+        >>> print(format_decisions(decisions))
+        Decisions (2 total):
+
+        1. Use JWT for authentication
+           Rationale: Stateless, scalable, industry standard
+           Made: 2024-01-15 10:30:00
+
+        2. Choose PostgreSQL over MongoDB
+           Rationale: Strong ACID compliance, better for relational data
+           Made: 2024-01-14 14:20:00
+    """
+    if not decisions:
+        return _format_empty_results(output_format, "decisions")
+
+    if output_format == "json":
+        return _format_decisions_json(decisions, verbose)
+    elif output_format == "table":
+        return _format_decisions_table(decisions, verbose)
+    else:
+        return _format_decisions_text(decisions, verbose)
+
+
+def format_recent(
+    items: List[Node],
+    output_format: str = "text",
+    verbose: bool = False
+) -> str:
+    """
+    Format a list of recent items (any node type) for display.
+
+    Renders a mixed list of recent nodes sorted by time, showing
+    the type, content, and timestamp for each item.
+
+    Args:
+        items: List of Node objects (any type), typically sorted by recency
+        output_format: Output format ("text", "json", or "table")
+        verbose: Whether to show detailed item information
+
+    Returns:
+        Formatted string representation of recent items.
+
+    Example:
+        >>> print(format_recent(items))
+        Recent Activity (5 items):
+
+        [10:30] [task] Implement user login
+        [10:25] [decision] Use JWT for authentication
+        [10:20] [session] Started work on auth module
+        [10:15] [task] Create database schema
+        [10:10] [note] Need to review security requirements
+    """
+    if not items:
+        return _format_empty_results(output_format, "recent items")
+
+    if output_format == "json":
+        return _format_recent_json(items, verbose)
+    elif output_format == "table":
+        return _format_recent_table(items, verbose)
+    else:
+        return _format_recent_text(items, verbose)
+
+
 # --- Private helper functions ---
 
 
@@ -164,6 +246,22 @@ def _get_task_checkbox(node: Node) -> str:
         return "[-]"
     else:
         return "[ ]"
+
+
+def _get_decision_rationale(node: Node) -> Optional[str]:
+    """Extract rationale from decision node metadata."""
+    if not node.metadata:
+        return None
+
+    # Try different field names for rationale
+    rationale_fields = ["rationale", "reason", "why", "justification", "explanation"]
+    for field in rationale_fields:
+        if field in node.metadata:
+            value = node.metadata[field]
+            if value:
+                return str(value)
+
+    return None
 
 
 def _get_source_attribution(node: Node) -> Optional[str]:
@@ -294,6 +392,67 @@ def _format_tasks_text(tasks: List[Node], verbose: bool) -> str:
     return "\n".join(lines)
 
 
+def _format_decisions_text(decisions: List[Node], verbose: bool) -> str:
+    """Format decisions as plain text list."""
+    lines = []
+    lines.append(f"Decisions ({len(decisions)} total):\n")
+
+    for i, decision in enumerate(decisions, 1):
+        content = _truncate_content(decision.content, 70) if not verbose else decision.content
+        lines.append(f"{i}. {content}")
+
+        # Show rationale if available
+        rationale = _get_decision_rationale(decision)
+        if rationale:
+            rationale_display = rationale if verbose else _truncate_content(rationale, 60)
+            lines.append(f"   Rationale: {rationale_display}")
+
+        lines.append(f"   Made: {_format_timestamp(decision.created_at)}")
+
+        # Show source attribution
+        source_line = _format_source_line(decision)
+        if source_line:
+            lines.append(source_line)
+
+        if verbose:
+            lines.append(f"   UUID: {decision.uuid}")
+            if decision.metadata:
+                for key, value in decision.metadata.items():
+                    if key not in ("rationale", "reason", "why"):
+                        lines.append(f"   {key}: {value}")
+
+        lines.append("")  # Blank line between decisions
+
+    return "\n".join(lines).strip()
+
+
+def _format_recent_text(items: List[Node], verbose: bool) -> str:
+    """Format recent items as plain text list."""
+    lines = []
+    lines.append(f"Recent Activity ({len(items)} items):\n")
+
+    for item in items:
+        # Format time as HH:MM
+        time_str = item.created_at.strftime("%H:%M") if item.created_at else "??:??"
+        type_str = f"[{item.type}]"
+        content = _truncate_content(item.content, 50) if not verbose else item.content
+
+        lines.append(f"[{time_str}] {type_str} {content}")
+
+        if verbose:
+            lines.append(f"         UUID: {item.uuid}")
+            lines.append(f"         Date: {_format_timestamp(item.created_at)}")
+            source_line = _format_source_line(item)
+            if source_line:
+                lines.append(f"        {source_line.strip()}")
+            if item.metadata:
+                for key, value in item.metadata.items():
+                    lines.append(f"         {key}: {value}")
+            lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 # --- JSON format implementations ---
 
 
@@ -334,6 +493,37 @@ def _format_tasks_json(tasks: List[Node], verbose: bool) -> str:
     output = {
         "count": len(tasks),
         "tasks": items
+    }
+    return json.dumps(output, indent=2, default=str)
+
+
+def _format_decisions_json(decisions: List[Node], verbose: bool) -> str:
+    """Format decisions as JSON."""
+    items = []
+    for decision in decisions:
+        item = _node_to_dict(decision, verbose)
+        rationale = _get_decision_rationale(decision)
+        if rationale:
+            item["rationale"] = rationale
+        items.append(item)
+
+    output = {
+        "count": len(decisions),
+        "decisions": items
+    }
+    return json.dumps(output, indent=2, default=str)
+
+
+def _format_recent_json(items: List[Node], verbose: bool) -> str:
+    """Format recent items as JSON."""
+    result_items = []
+    for item in items:
+        item_dict = _node_to_dict(item, verbose)
+        result_items.append(item_dict)
+
+    output = {
+        "count": len(items),
+        "items": result_items
     }
     return json.dumps(output, indent=2, default=str)
 
@@ -428,6 +618,34 @@ def _format_tasks_table(tasks: List[Node], verbose: bool) -> str:
         content = _truncate_content(task.content, 50)
         created = _format_timestamp(task.created_at)
         rows.append([checkbox, content, created])
+
+    return _build_ascii_table(headers, rows)
+
+
+def _format_decisions_table(decisions: List[Node], verbose: bool) -> str:
+    """Format decisions as ASCII table."""
+    headers = ["#", "Decision", "Rationale", "Date"]
+    rows = []
+    for i, decision in enumerate(decisions, 1):
+        content = _truncate_content(decision.content, 35)
+        rationale = _get_decision_rationale(decision) or "-"
+        rationale = _truncate_content(rationale, 25)
+        date = decision.created_at.strftime("%Y-%m-%d") if decision.created_at else "-"
+        rows.append([str(i), content, rationale, date])
+
+    return _build_ascii_table(headers, rows)
+
+
+def _format_recent_table(items: List[Node], verbose: bool) -> str:
+    """Format recent items as ASCII table."""
+    headers = ["Time", "Type", "Content", "Source"]
+    rows = []
+    for item in items:
+        time_str = item.created_at.strftime("%H:%M") if item.created_at else "??:??"
+        content = _truncate_content(item.content, 40)
+        source = _get_source_attribution(item) or "-"
+        source = _truncate_content(source, 15)
+        rows.append([time_str, item.type, content, source])
 
     return _build_ascii_table(headers, rows)
 
