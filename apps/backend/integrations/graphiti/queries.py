@@ -6,7 +6,7 @@ graph traversal, and temporal queries. These utilities build on the GraphitiClie
 to enable powerful knowledge retrieval patterns.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Set
 import logging
 import math
 
@@ -135,6 +135,131 @@ def search_semantic(
         results = results[:limit]
 
         logger.info(f"Semantic search found {len(results)} results")
+        return results
+
+    finally:
+        if should_disconnect:
+            client.disconnect()
+
+
+def _get_descendant_nodes(
+    scope_node_id: str,
+    client: GraphitiClient,
+    visited: Optional[Set[str]] = None
+) -> Set[str]:
+    """
+    Recursively get all descendant node IDs under a scope node.
+
+    Traverses the graph following 'contains' edges to find all nodes
+    hierarchically contained within the scope node.
+
+    Args:
+        scope_node_id: The UUID of the scope/parent node
+        client: GraphitiClient instance to use for queries
+        visited: Set of already visited node IDs (for cycle detection)
+
+    Returns:
+        Set of node UUIDs that are descendants of the scope node
+    """
+    if visited is None:
+        visited = set()
+
+    # Avoid infinite loops in case of cycles
+    if scope_node_id in visited:
+        return set()
+
+    visited.add(scope_node_id)
+    descendants = {scope_node_id}
+
+    # Find all edges where this node is the source with type 'contains'
+    edges = client.query_edges(filters={"source_id": scope_node_id, "type": "contains"})
+
+    for edge in edges:
+        # Recursively get descendants of each child
+        child_descendants = _get_descendant_nodes(edge.target_id, client, visited)
+        descendants.update(child_descendants)
+
+    return descendants
+
+
+def search_scoped(
+    scope_node_id: str,
+    query: str,
+    limit: int = 10,
+    client: Optional[GraphitiClient] = None
+) -> List[Tuple[Node, float]]:
+    """
+    Perform semantic search within a hierarchical scope.
+
+    Searches only within nodes that are hierarchically contained under
+    the specified scope node. This enables scoped queries like "find tasks
+    within this project" or "search decisions in this session".
+
+    Args:
+        scope_node_id: The UUID of the scope/parent node to search within
+        query: The search query (natural language or keywords)
+        limit: Maximum number of results to return (default: 10)
+        client: Optional GraphitiClient instance. If not provided, creates a new one.
+
+    Returns:
+        List of (Node, score) tuples, sorted by relevance (highest first).
+        Only includes nodes within the specified scope.
+
+    Example:
+        >>> # Search for authentication tasks within a specific project
+        >>> results = search_scoped(project_id, "authentication")
+        >>> for node, score in results:
+        ...     print(f"{node.type}: {node.content[:50]} (score: {score:.2f})")
+
+    Notes:
+        - Scope is determined by following 'contains' edges recursively
+        - The scope node itself is included in the search
+        - Nodes without embeddings are excluded from results
+        - Results are sorted by similarity score in descending order
+    """
+    # Create or use provided client
+    should_disconnect = False
+    if client is None:
+        client = GraphitiClient()
+        client.connect()
+        should_disconnect = True
+
+    try:
+        logger.info(
+            f"Performing scoped search for query: '{query}' "
+            f"within scope={scope_node_id} (limit={limit})"
+        )
+
+        # Get all descendant node IDs under the scope
+        descendant_ids = _get_descendant_nodes(scope_node_id, client)
+        logger.info(f"Found {len(descendant_ids)} nodes within scope")
+
+        # Generate embedding for the query
+        query_embedding = _generate_query_embedding(query)
+
+        # Compute similarity scores for nodes within the scope
+        results: List[Tuple[Node, float]] = []
+
+        for node in client._nodes.values():
+            # Only consider nodes within the scope
+            if node.uuid not in descendant_ids:
+                continue
+
+            # Skip nodes without embeddings
+            if node.embedding is None:
+                continue
+
+            # Compute cosine similarity
+            similarity = _compute_cosine_similarity(query_embedding, node.embedding)
+            results.append((node, similarity))
+
+        # Sort by similarity score (descending)
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply limit
+        results = results[:limit]
+
+        logger.info(f"Scoped search found {len(results)} results")
         return results
 
     finally:
