@@ -629,6 +629,213 @@ def test_semantic_accuracy() -> bool:
     return semantic_success
 
 
+def test_performance_benchmark() -> bool:
+    """
+    Test search performance to verify queries complete in <1 second.
+
+    Per spec requirement:
+        Typical queries complete in <1 second (measured via benchmarks).
+
+    This test:
+    1. Creates a set of test documents with embeddings
+    2. Runs 10 diverse search queries
+    3. Times each query individually
+    4. Reports statistics (min, max, average, p95)
+    5. Verifies average query time is under 1 second
+
+    Returns:
+        True if all tests pass, False otherwise
+    """
+    import statistics
+    import time
+
+    print_header("Test: Performance Benchmark (<1 second queries)")
+
+    # Performance threshold from spec
+    PERFORMANCE_THRESHOLD_SECONDS = 1.0
+
+    try:
+        from integrations.graphiti.providers.ollama_embedder import (
+            OllamaEmbedder,
+        )
+    except ImportError as e:
+        print_result("Import", f"FAILED: {e}", False)
+        return False
+
+    # Step 1: Create embedder
+    print_step(1, "Creating embedder for performance test")
+
+    try:
+        embedder = OllamaEmbedder()
+        print_result("Create embedder", f"model={embedder.config.model}", True)
+    except Exception as e:
+        print_result("Create embedder", f"FAILED: {e}", False)
+        return False
+
+    # Step 2: Create diverse document set for realistic benchmarking
+    print_step(2, "Creating document corpus for benchmarking")
+
+    # Create a corpus of diverse documents to simulate realistic search workload
+    documents = [
+        # Authentication domain
+        {"id": "auth-1", "content": "OAuth 2.0 authorization flow with Google and GitHub identity providers"},
+        {"id": "auth-2", "content": "JWT token generation, validation, and refresh mechanisms for API access"},
+        {"id": "auth-3", "content": "Session management with secure cookies and CSRF protection"},
+        {"id": "auth-4", "content": "Multi-factor authentication using TOTP and SMS verification"},
+        # Database domain
+        {"id": "db-1", "content": "PostgreSQL database connection pooling and query optimization techniques"},
+        {"id": "db-2", "content": "Redis caching strategies for session storage and rate limiting"},
+        {"id": "db-3", "content": "MongoDB schema design patterns for document collections"},
+        # Frontend domain
+        {"id": "ui-1", "content": "React component state management using hooks and context API"},
+        {"id": "ui-2", "content": "TypeScript interfaces and type definitions for API responses"},
+        {"id": "ui-3", "content": "CSS-in-JS styling solutions with styled-components"},
+        # DevOps domain
+        {"id": "devops-1", "content": "Docker container orchestration with Kubernetes pod scheduling"},
+        {"id": "devops-2", "content": "CI/CD pipeline configuration for automated testing and deployment"},
+        {"id": "devops-3", "content": "Infrastructure as code with Terraform and AWS resources"},
+        # Security domain
+        {"id": "sec-1", "content": "Input validation and sanitization for SQL injection prevention"},
+        {"id": "sec-2", "content": "Content Security Policy headers for XSS protection"},
+    ]
+
+    doc_embeddings = []
+    embed_start = time.perf_counter()
+    for doc in documents:
+        embedding = embedder.embed(doc["content"])
+        doc_embeddings.append({**doc, "embedding": embedding})
+    embed_time = time.perf_counter() - embed_start
+
+    print_result(
+        "Document corpus",
+        f"Created {len(doc_embeddings)} embeddings in {embed_time:.3f}s",
+        True
+    )
+
+    # Step 3: Define diverse benchmark queries
+    print_step(3, "Running benchmark queries")
+
+    # 10 diverse queries to test different domains and complexity levels
+    benchmark_queries = [
+        "login security and authentication",
+        "database performance optimization",
+        "user interface component design",
+        "container deployment strategies",
+        "API token management",
+        "caching and session storage",
+        "automated testing pipelines",
+        "input validation security",
+        "state management patterns",
+        "infrastructure provisioning",
+    ]
+
+    # Step 4: Execute timed queries
+    query_times = []
+    print(f"\n  Running {len(benchmark_queries)} benchmark queries...")
+    print()
+
+    for i, query in enumerate(benchmark_queries, 1):
+        # Time the full search operation
+        start_time = time.perf_counter()
+
+        # Generate query embedding
+        query_embedding = embedder.embed(query)
+
+        # Compute similarities (simulating search)
+        similarities = []
+        for doc in doc_embeddings:
+            sim = cosine_similarity(query_embedding, doc["embedding"])
+            similarities.append((doc["id"], sim))
+
+        # Sort by similarity (simulating ranking)
+        similarities.sort(key=lambda x: x[1], reverse=True)
+
+        # Get top results (simulating retrieval)
+        top_results = similarities[:5]
+
+        elapsed_time = time.perf_counter() - start_time
+        query_times.append(elapsed_time)
+
+        # Report individual query time
+        status = "✓" if elapsed_time < PERFORMANCE_THRESHOLD_SECONDS else "✗"
+        print(f"    {status} Query {i:2d}: {elapsed_time:.4f}s - '{query[:35]}...'")
+
+    # Step 5: Calculate and report statistics
+    print_step(4, "Calculating performance statistics")
+
+    avg_time = statistics.mean(query_times)
+    min_time = min(query_times)
+    max_time = max(query_times)
+    median_time = statistics.median(query_times)
+
+    # Calculate p95 if we have enough samples
+    if len(query_times) >= 5:
+        sorted_times = sorted(query_times)
+        p95_index = int(len(sorted_times) * 0.95)
+        p95_time = sorted_times[min(p95_index, len(sorted_times) - 1)]
+    else:
+        p95_time = max_time
+
+    print(f"\n  Performance Statistics:")
+    print(f"    Queries executed:  {len(query_times)}")
+    print(f"    Minimum time:      {min_time:.4f}s")
+    print(f"    Maximum time:      {max_time:.4f}s")
+    print(f"    Average time:      {avg_time:.4f}s")
+    print(f"    Median time:       {median_time:.4f}s")
+    print(f"    P95 time:          {p95_time:.4f}s")
+    print(f"    Threshold:         {PERFORMANCE_THRESHOLD_SECONDS:.1f}s")
+    print()
+
+    # Step 6: Verify performance requirements
+    print_step(5, "Verifying performance requirements")
+
+    # Check average time against threshold
+    avg_pass = avg_time < PERFORMANCE_THRESHOLD_SECONDS
+    print_result(
+        "Average query time",
+        f"{avg_time:.4f}s < {PERFORMANCE_THRESHOLD_SECONDS}s",
+        avg_pass
+    )
+
+    # Check P95 time (more lenient - allow 2x threshold)
+    p95_threshold = PERFORMANCE_THRESHOLD_SECONDS * 2
+    p95_pass = p95_time < p95_threshold
+    print_result(
+        "P95 query time",
+        f"{p95_time:.4f}s < {p95_threshold}s",
+        p95_pass
+    )
+
+    # Count queries under threshold
+    queries_under_threshold = sum(1 for t in query_times if t < PERFORMANCE_THRESHOLD_SECONDS)
+    queries_pass = queries_under_threshold >= len(query_times) * 0.9  # 90% should pass
+    print_result(
+        "Queries under threshold",
+        f"{queries_under_threshold}/{len(query_times)} ({queries_under_threshold/len(query_times)*100:.0f}%)",
+        queries_pass
+    )
+
+    # Overall result
+    print()
+    all_pass = avg_pass and p95_pass and queries_pass
+    print_result(
+        "Performance Benchmark",
+        "All performance requirements met" if all_pass else "Some requirements not met",
+        all_pass
+    )
+
+    # Provide guidance if failed
+    if not all_pass:
+        print()
+        print_info("Performance may be affected by:")
+        print_info("  - Ollama model loading (first query is slower)")
+        print_info("  - System load and available resources")
+        print_info("  - Embedding model size and complexity")
+        print_info("Try running the benchmark again after Ollama model is warm")
+
+    return all_pass
+
+
 def test_full_cycle() -> bool:
     """
     Test the complete embedding cycle including semantic search.
@@ -736,9 +943,9 @@ def main():
     parser = argparse.ArgumentParser(description="Test Ollama Embedding Integration")
     parser.add_argument(
         "--test",
-        choices=["all", "embeddings", "full-cycle", "retrieve", "semantic"],
+        choices=["all", "embeddings", "full-cycle", "retrieve", "semantic", "performance"],
         default="all",
-        help="Which test to run (retrieve tests context metadata, semantic tests conceptual matching)",
+        help="Which test to run (retrieve tests context metadata, semantic tests conceptual matching, performance tests query speed)",
     )
 
     args = parser.parse_args()
@@ -770,6 +977,9 @@ def main():
 
     if args.test in ["all", "semantic", "full-cycle"]:
         results["semantic"] = test_semantic_accuracy()
+
+    if args.test in ["all", "performance", "full-cycle"]:
+        results["performance"] = test_performance_benchmark()
 
     if args.test in ["all", "full-cycle"]:
         results["full-cycle"] = test_full_cycle()
