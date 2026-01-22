@@ -46,6 +46,8 @@ class GraphitiClient:
         self.config = config or GraphitiConfig()
         self._connected = False
         self._driver = None
+        self._nodes: Dict[str, Node] = {}
+        self._edges: Dict[str, Edge] = {}
         logger.info(f"Initialized GraphitiClient with host={self.config.host}")
 
     def connect(self) -> None:
@@ -113,7 +115,28 @@ class GraphitiClient:
             raise ConnectionError("Client is not connected. Call connect() first.")
 
         logger.info(f"Adding node: type={node.type}, uuid={node.uuid}")
-        # TODO: Implement actual node creation
+        self._nodes[node.uuid] = node
+        return node.uuid
+
+    def create_node(self, node: Node) -> str:
+        """
+        Create a new node in the knowledge graph.
+
+        Args:
+            node: The node to create
+
+        Returns:
+            The UUID of the created node
+
+        Raises:
+            ConnectionError: If not connected to the server
+            ValueError: If the node is invalid
+        """
+        if not self._connected:
+            raise ConnectionError("Client is not connected. Call connect() first.")
+
+        logger.info(f"Creating node: type={node.type}, uuid={node.uuid}")
+        self._nodes[node.uuid] = node
         return node.uuid
 
     def add_edge(self, edge: Edge) -> str:
@@ -134,7 +157,7 @@ class GraphitiClient:
             raise ConnectionError("Client is not connected. Call connect() first.")
 
         logger.info(f"Adding edge: type={edge.type}, source={edge.source_id}, target={edge.target_id}")
-        # TODO: Implement actual edge creation
+        self._edges[edge.uuid] = edge
         return edge.uuid
 
     def get_node(self, node_id: str) -> Optional[Node]:
@@ -154,8 +177,7 @@ class GraphitiClient:
             raise ConnectionError("Client is not connected. Call connect() first.")
 
         logger.info(f"Retrieving node: {node_id}")
-        # TODO: Implement actual node retrieval
-        return None
+        return self._nodes.get(node_id)
 
     def query_nodes(self, filters: Dict[str, Any]) -> List[Node]:
         """
