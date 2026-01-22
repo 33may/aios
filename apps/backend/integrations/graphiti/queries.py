@@ -9,6 +9,7 @@ to enable powerful knowledge retrieval patterns.
 from typing import List, Optional, Tuple, Set, Dict, Any
 import logging
 import math
+import time
 from datetime import datetime
 
 from .client import GraphitiClient
@@ -24,6 +25,9 @@ MAX_CONTEXT_RESULTS = 10
 
 # Default minimum score threshold for filtering results
 DEFAULT_MIN_SCORE = 0.0
+
+# Performance threshold for query timing warnings (in seconds)
+QUERY_PERFORMANCE_THRESHOLD_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +130,9 @@ def search_semantic(
     try:
         logger.info(f"Performing semantic search for query: '{query}' (limit={limit})")
 
+        # Start timing for performance measurement
+        start_time = time.perf_counter()
+
         # Generate embedding for the query
         query_embedding = _generate_query_embedding(query)
 
@@ -146,7 +153,22 @@ def search_semantic(
         # Apply limit
         results = results[:limit]
 
-        logger.info(f"Semantic search found {len(results)} results")
+        # End timing and log performance
+        elapsed_time = time.perf_counter() - start_time
+
+        if elapsed_time > QUERY_PERFORMANCE_THRESHOLD_SECONDS:
+            logger.warning(
+                f"Semantic search exceeded performance threshold: "
+                f"{elapsed_time:.3f}s > {QUERY_PERFORMANCE_THRESHOLD_SECONDS}s "
+                f"(query='{query[:50]}...', results={len(results)})"
+            )
+        else:
+            logger.debug(
+                f"Semantic search completed in {elapsed_time:.3f}s "
+                f"(query='{query[:50]}...', results={len(results)})"
+            )
+
+        logger.info(f"Semantic search found {len(results)} results in {elapsed_time:.3f}s")
         return results
 
     finally:
@@ -202,6 +224,9 @@ def get_relevant_context(
         logger.info("Empty query provided, returning empty results")
         return []
 
+    # Start timing for end-to-end performance measurement
+    start_time = time.perf_counter()
+
     # Perform semantic search
     search_results = search_semantic(
         query=query,
@@ -237,9 +262,19 @@ def get_relevant_context(
 
         context_items.append(context_item)
 
+    # End timing and log performance
+    elapsed_time = time.perf_counter() - start_time
+
+    if elapsed_time > QUERY_PERFORMANCE_THRESHOLD_SECONDS:
+        logger.warning(
+            f"get_relevant_context exceeded performance threshold: "
+            f"{elapsed_time:.3f}s > {QUERY_PERFORMANCE_THRESHOLD_SECONDS}s "
+            f"(query='{query[:50]}...', results={len(context_items)})"
+        )
+
     logger.info(
         f"get_relevant_context: Found {len(context_items)} results "
-        f"for query '{query[:50]}...' (min_score={min_score})"
+        f"for query '{query[:50]}...' in {elapsed_time:.3f}s (min_score={min_score})"
     )
 
     return context_items
@@ -333,6 +368,9 @@ def search_scoped(
             f"within scope={scope_node_id} (limit={limit})"
         )
 
+        # Start timing for performance measurement
+        start_time = time.perf_counter()
+
         # Get all descendant node IDs under the scope
         descendant_ids = _get_descendant_nodes(scope_node_id, client)
         logger.info(f"Found {len(descendant_ids)} nodes within scope")
@@ -362,7 +400,22 @@ def search_scoped(
         # Apply limit
         results = results[:limit]
 
-        logger.info(f"Scoped search found {len(results)} results")
+        # End timing and log performance
+        elapsed_time = time.perf_counter() - start_time
+
+        if elapsed_time > QUERY_PERFORMANCE_THRESHOLD_SECONDS:
+            logger.warning(
+                f"Scoped search exceeded performance threshold: "
+                f"{elapsed_time:.3f}s > {QUERY_PERFORMANCE_THRESHOLD_SECONDS}s "
+                f"(query='{query[:50]}...', scope={scope_node_id}, results={len(results)})"
+            )
+        else:
+            logger.debug(
+                f"Scoped search completed in {elapsed_time:.3f}s "
+                f"(query='{query[:50]}...', scope={scope_node_id}, results={len(results)})"
+            )
+
+        logger.info(f"Scoped search found {len(results)} results in {elapsed_time:.3f}s")
         return results
 
     finally:
