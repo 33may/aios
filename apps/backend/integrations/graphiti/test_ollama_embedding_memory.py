@@ -231,6 +231,209 @@ def test_ollama_embeddings() -> bool:
     return True
 
 
+def test_retrieve_context_metadata() -> bool:
+    """
+    Test that get_relevant_context() returns results with context metadata.
+
+    Verifies that search results include:
+    - content: The main content of the node
+    - score: The similarity score (0.0 to 1.0)
+    - type: The node type
+    - source_file: Where knowledge was captured (if available)
+    - captured_at: When knowledge was captured (ISO 8601)
+    - episode_type: Type of episode that captured knowledge
+
+    Returns:
+        True if all tests pass, False otherwise
+    """
+    print_header("Test: Context Metadata in Search Results")
+
+    # Import required modules
+    try:
+        from integrations.graphiti.queries import get_relevant_context
+        from integrations.graphiti.client import GraphitiClient
+        from integrations.graphiti.models import Node
+        from integrations.graphiti.schema import (
+            METADATA_SOURCE_FILE,
+            METADATA_CAPTURED_AT,
+            METADATA_EPISODE_TYPE,
+        )
+        from integrations.graphiti.providers.ollama_embedder import OllamaEmbedder
+        print_result("Import modules", "SUCCESS", True)
+    except ImportError as e:
+        print_result("Import modules", f"FAILED: {e}", False)
+        return False
+
+    # Step 1: Create embedder
+    print_step(1, "Creating embedder for test data")
+
+    try:
+        embedder = OllamaEmbedder()
+        print_result("Create embedder", f"model={embedder.config.model}", True)
+    except Exception as e:
+        print_result("Create embedder", f"FAILED: {e}", False)
+        return False
+
+    # Step 2: Create client and test nodes with metadata
+    print_step(2, "Creating test nodes with context metadata")
+
+    try:
+        client = GraphitiClient()
+        client.connect()
+
+        # Create test nodes with rich metadata including source_file and episode_type
+        test_nodes_data = [
+            {
+                "type": "decision",
+                "content": "Use OAuth 2.0 for authentication with Google and GitHub providers",
+                "metadata": {
+                    METADATA_SOURCE_FILE: "/src/auth/oauth.py",
+                    METADATA_EPISODE_TYPE: "architecture_decision",
+                },
+            },
+            {
+                "type": "discovery",
+                "content": "JWT tokens must be validated on the server side for security",
+                "metadata": {
+                    METADATA_SOURCE_FILE: "/src/security/jwt.py",
+                    METADATA_EPISODE_TYPE: "security_audit",
+                },
+            },
+            {
+                "type": "task",
+                "content": "Implement user profile management with role-based access control",
+                "metadata": {
+                    METADATA_SOURCE_FILE: "/src/users/profiles.py",
+                    METADATA_EPISODE_TYPE: "feature_implementation",
+                },
+            },
+        ]
+
+        created_nodes = []
+        for node_data in test_nodes_data:
+            # Generate embedding for the content
+            embedding = embedder.embed(node_data["content"])
+
+            # Create node with embedding and metadata
+            node = Node(
+                type=node_data["type"],
+                content=node_data["content"],
+                embedding=embedding,
+                metadata=node_data["metadata"],
+            )
+            client.create_node(node)
+            created_nodes.append(node)
+            print_info(f"Created node: {node.type} - {node.content[:40]}...")
+
+        print_result("Create test nodes", f"Created {len(created_nodes)} nodes with metadata", True)
+    except Exception as e:
+        print_result("Create test nodes", f"FAILED: {e}", False)
+        client.disconnect()
+        return False
+
+    # Step 3: Test get_relevant_context with a search query
+    print_step(3, "Calling get_relevant_context()")
+
+    try:
+        results = get_relevant_context(
+            query="authentication security",
+            num_results=5,
+            min_score=0.0,
+            client=client,
+        )
+        print_result("Execute search", f"Found {len(results)} results", len(results) > 0)
+
+        if len(results) == 0:
+            print_info("No results returned - cannot verify metadata")
+            client.disconnect()
+            return False
+
+    except Exception as e:
+        print_result("Execute search", f"FAILED: {e}", False)
+        client.disconnect()
+        return False
+
+    # Step 4: Verify metadata fields are present in results
+    print_step(4, "Verifying metadata fields in results")
+
+    required_fields = ["content", "score", "type", METADATA_SOURCE_FILE, METADATA_CAPTURED_AT, METADATA_EPISODE_TYPE]
+    all_fields_present = True
+
+    for i, result in enumerate(results):
+        print(f"\n  Result {i + 1}:")
+        for field_name in required_fields:
+            field_value = result.get(field_name)
+            field_present = field_name in result
+            # Note: Some fields may be None, but the key should exist
+            if field_present:
+                # Truncate long values for display
+                display_value = str(field_value)
+                if len(display_value) > 50:
+                    display_value = display_value[:47] + "..."
+                print_result(f"  {field_name}", display_value, True)
+            else:
+                print_result(f"  {field_name}", "MISSING", False)
+                all_fields_present = False
+
+    # Step 5: Verify score is a valid float between 0 and 1
+    print_step(5, "Verifying score values are valid")
+
+    scores_valid = True
+    for i, result in enumerate(results):
+        score = result.get("score")
+        if not isinstance(score, (int, float)):
+            print_result(f"Result {i + 1} score type", f"Invalid: {type(score)}", False)
+            scores_valid = False
+        elif not (0.0 <= score <= 1.0):
+            print_result(f"Result {i + 1} score range", f"Out of range: {score}", False)
+            scores_valid = False
+        else:
+            print_result(f"Result {i + 1} score", f"{score:.4f}", True)
+
+    # Step 6: Verify captured_at is ISO 8601 format
+    print_step(6, "Verifying captured_at timestamp format")
+
+    timestamps_valid = True
+    for i, result in enumerate(results):
+        captured_at = result.get(METADATA_CAPTURED_AT)
+        if captured_at is None:
+            print_result(f"Result {i + 1} captured_at", "None (acceptable)", True)
+        else:
+            try:
+                # Verify ISO 8601 format by parsing
+                from datetime import datetime
+                # Handle both with and without microseconds
+                if "." in captured_at:
+                    datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+                else:
+                    datetime.fromisoformat(captured_at)
+                print_result(f"Result {i + 1} captured_at", f"Valid ISO 8601: {captured_at[:26]}...", True)
+            except ValueError as e:
+                print_result(f"Result {i + 1} captured_at", f"Invalid format: {e}", False)
+                timestamps_valid = False
+
+    # Step 7: Test empty query handling
+    print_step(7, "Testing empty query handling")
+
+    try:
+        empty_results = get_relevant_context(query="", client=client)
+        if len(empty_results) == 0:
+            print_result("Empty query", "Returns empty list correctly", True)
+        else:
+            print_result("Empty query", f"Expected empty, got {len(empty_results)} results", False)
+    except Exception as e:
+        print_result("Empty query", f"FAILED with exception: {e}", False)
+
+    # Clean up
+    client.disconnect()
+
+    # Final result
+    print()
+    success = all_fields_present and scores_valid and timestamps_valid
+    print_result("Context Metadata Test", "All tests passed" if success else "Some tests failed", success)
+    return success
+
+
 def test_full_cycle() -> bool:
     """
     Test the complete embedding cycle including semantic search.
@@ -338,9 +541,9 @@ def main():
     parser = argparse.ArgumentParser(description="Test Ollama Embedding Integration")
     parser.add_argument(
         "--test",
-        choices=["all", "embeddings", "full-cycle"],
+        choices=["all", "embeddings", "full-cycle", "retrieve"],
         default="all",
-        help="Which test to run",
+        help="Which test to run (retrieve tests context metadata in search results)",
     )
 
     args = parser.parse_args()
@@ -366,6 +569,9 @@ def main():
 
     if args.test in ["all", "embeddings"]:
         results["embeddings"] = test_ollama_embeddings()
+
+    if args.test in ["all", "retrieve"]:
+        results["retrieve"] = test_retrieve_context_metadata()
 
     if args.test in ["all", "full-cycle"]:
         results["full-cycle"] = test_full_cycle()
