@@ -6,13 +6,24 @@ graph traversal, and temporal queries. These utilities build on the GraphitiClie
 to enable powerful knowledge retrieval patterns.
 """
 
-from typing import List, Optional, Tuple, Set, Dict
+from typing import List, Optional, Tuple, Set, Dict, Any
 import logging
 import math
 from datetime import datetime
 
 from .client import GraphitiClient
 from .models import Node, Edge
+from .schema import (
+    METADATA_SOURCE_FILE,
+    METADATA_CAPTURED_AT,
+    METADATA_EPISODE_TYPE,
+)
+
+# Default maximum number of context results to return
+MAX_CONTEXT_RESULTS = 10
+
+# Default minimum score threshold for filtering results
+DEFAULT_MIN_SCORE = 0.0
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +152,97 @@ def search_semantic(
     finally:
         if should_disconnect:
             client.disconnect()
+
+
+def get_relevant_context(
+    query: str,
+    num_results: int = MAX_CONTEXT_RESULTS,
+    min_score: float = DEFAULT_MIN_SCORE,
+    client: Optional[GraphitiClient] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get relevant context for a query with rich metadata.
+
+    Performs semantic search and returns results enriched with context metadata
+    including source file, capture timestamp, and episode type. This function
+    is designed for use in context retrieval where the "where" and "when" of
+    knowledge is as important as the content itself.
+
+    Args:
+        query: The search query (natural language or keywords)
+        num_results: Maximum number of results to return (default: MAX_CONTEXT_RESULTS)
+        min_score: Minimum similarity score threshold (default: 0.0).
+                   Results below this score are filtered out.
+        client: Optional GraphitiClient instance. If not provided, creates a new one.
+
+    Returns:
+        List of dictionaries, each containing:
+        - content: The main content of the node
+        - score: The similarity score (0.0 to 1.0)
+        - type: The node type (e.g., 'decision', 'task', 'discovery')
+        - source_file: The file path where knowledge was captured (if available)
+        - captured_at: ISO 8601 timestamp when knowledge was captured
+        - episode_type: The type of episode that captured this knowledge (if available)
+
+    Example:
+        >>> results = get_relevant_context("authentication best practices")
+        >>> for item in results:
+        ...     print(f"[{item['type']}] {item['content'][:50]}")
+        ...     print(f"  Score: {item['score']:.2f}")
+        ...     print(f"  Source: {item['source_file']}")
+        ...     print(f"  Captured: {item['captured_at']}")
+
+    Notes:
+        - Results are sorted by similarity score in descending order
+        - Context metadata fields may be None if not present in the node
+        - Empty queries return an empty list with no error
+    """
+    # Handle empty query
+    if not query or not query.strip():
+        logger.info("Empty query provided, returning empty results")
+        return []
+
+    # Perform semantic search
+    search_results = search_semantic(
+        query=query,
+        limit=num_results,
+        client=client
+    )
+
+    # Convert results to context items with metadata
+    context_items: List[Dict[str, Any]] = []
+
+    for node, score in search_results:
+        # Filter by minimum score
+        if score < min_score:
+            continue
+
+        # Extract metadata from node
+        metadata = node.metadata or {}
+
+        # Format captured_at timestamp as ISO 8601
+        captured_at = None
+        if node.created_at:
+            captured_at = node.created_at.isoformat()
+
+        # Build context item with all metadata
+        context_item = {
+            "content": node.content,
+            "score": score,
+            "type": node.type,
+            METADATA_SOURCE_FILE: metadata.get(METADATA_SOURCE_FILE),
+            METADATA_CAPTURED_AT: captured_at,
+            METADATA_EPISODE_TYPE: metadata.get(METADATA_EPISODE_TYPE, node.type),
+        }
+
+        context_items.append(context_item)
+
+    logger.info(
+        f"get_relevant_context: Found {len(context_items)} results "
+        f"for query '{query[:50]}...' (min_score={min_score})"
+    )
+
+    return context_items
 
 
 def _get_descendant_nodes(
