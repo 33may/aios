@@ -1,0 +1,32 @@
+#!/bin/bash
+# Claude Code Manager Mode Wrapper
+#
+# Usage: claude-manager [claude args...]
+#
+# Starts Claude Code and immediately sends "manager mode" to initialize
+# the knowledge graph session.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Change to project directory
+cd "$PROJECT_DIR"
+
+# Start claude with the manager mode init prompt
+# Using --print to show output, then continue interactive
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Claude Code Manager Mode"
+    echo ""
+    echo "Usage: claude-manager [options]"
+    echo ""
+    echo "Starts Claude Code in manager mode with knowledge graph context."
+    echo "Equivalent to starting claude and saying 'manager mode'."
+    echo ""
+    echo "Options:"
+    echo "  --help, -h    Show this help"
+    echo "  All other options are passed to claude"
+    exit 0
+fi
+
+# Run claude with initial prompt
+exec claude --prompt "manager mode - initialize session and tell me the current project state" "$@"

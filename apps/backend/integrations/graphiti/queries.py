@@ -136,22 +136,8 @@ def search_semantic(
         # Generate embedding for the query
         query_embedding = _generate_query_embedding(query)
 
-        # Compute similarity scores for all nodes with embeddings
-        results: List[Tuple[Node, float]] = []
-
-        for node in client._nodes.values():
-            if node.embedding is None:
-                continue
-
-            # Compute cosine similarity
-            similarity = _compute_cosine_similarity(query_embedding, node.embedding)
-            results.append((node, similarity))
-
-        # Sort by similarity score (descending)
-        results.sort(key=lambda x: x[1], reverse=True)
-
-        # Apply limit
-        results = results[:limit]
+        # Use the backend's search_similar method for efficient vector search
+        results = client.search_similar(query_embedding, limit=limit, min_score=0.0)
 
         # End timing and log performance
         elapsed_time = time.perf_counter() - start_time
@@ -378,27 +364,16 @@ def search_scoped(
         # Generate embedding for the query
         query_embedding = _generate_query_embedding(query)
 
-        # Compute similarity scores for nodes within the scope
+        # Use backend's search_similar and filter by scope
+        all_results = client.search_similar(query_embedding, limit=limit * 5, min_score=0.0)
+
+        # Filter to only nodes within the scope
         results: List[Tuple[Node, float]] = []
-
-        for node in client._nodes.values():
-            # Only consider nodes within the scope
-            if node.uuid not in descendant_ids:
-                continue
-
-            # Skip nodes without embeddings
-            if node.embedding is None:
-                continue
-
-            # Compute cosine similarity
-            similarity = _compute_cosine_similarity(query_embedding, node.embedding)
-            results.append((node, similarity))
-
-        # Sort by similarity score (descending)
-        results.sort(key=lambda x: x[1], reverse=True)
-
-        # Apply limit
-        results = results[:limit]
+        for node, similarity in all_results:
+            if node.uuid in descendant_ids:
+                results.append((node, similarity))
+                if len(results) >= limit:
+                    break
 
         # End timing and log performance
         elapsed_time = time.perf_counter() - start_time
@@ -673,13 +648,8 @@ def query_temporal(
     try:
         logger.info(f"Querying temporal range: {start} to {end} (include_edges={include_edges})")
 
-        # Filter nodes by timestamp
-        matching_nodes: List[Node] = []
-
-        for node in client._nodes.values():
-            # Check if node falls within the time range (created or updated)
-            if (start <= node.created_at <= end) or (start <= node.updated_at <= end):
-                matching_nodes.append(node)
+        # Use client's query_nodes_by_time method
+        matching_nodes = client.query_nodes_by_time(start, end, node_type=None)
 
         # Sort by created_at (newest first)
         matching_nodes.sort(key=lambda n: n.created_at, reverse=True)
@@ -692,11 +662,12 @@ def query_temporal(
             "edges": []
         }
 
-        # Optionally include edges
+        # Optionally include edges - query all edges and filter by time
         if include_edges:
+            all_edges = client.query_edges(limit=10000)
             matching_edges: List[Edge] = []
 
-            for edge in client._edges.values():
+            for edge in all_edges:
                 # Check if edge falls within the time range (created or updated)
                 if (start <= edge.created_at <= end) or (start <= edge.updated_at <= end):
                     matching_edges.append(edge)
@@ -772,21 +743,8 @@ def query_temporal_nodes(
             f"node_type={node_type}"
         )
 
-        # Filter nodes by timestamp and optionally by type
-        matching_nodes: List[Node] = []
-
-        for node in client._nodes.values():
-            # Check if node falls within the time range (created or updated)
-            in_time_range = (start <= node.created_at <= end) or (start <= node.updated_at <= end)
-
-            if not in_time_range:
-                continue
-
-            # Apply node type filter if specified
-            if node_type is not None and node.type != node_type:
-                continue
-
-            matching_nodes.append(node)
+        # Use client's query_nodes_by_time method
+        matching_nodes = client.query_nodes_by_time(start, end, node_type=node_type)
 
         # Sort by created_at (newest first)
         matching_nodes.sort(key=lambda n: n.created_at, reverse=True)

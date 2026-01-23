@@ -1,0 +1,63 @@
+version: '3.8'
+
+# Knowledge Graph Database
+# PostgreSQL + pgvector for persistent storage
+#
+# Deploy on home server:
+#   docker-compose up -d
+#
+# Initialize schema:
+#   docker-compose exec db psql -U knowledge -d knowledge_graph -f /schema/schema.sql
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: knowledge-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: ${KNOWLEDGE_DB_PASSWORD:-changeme}
+      POSTGRES_DB: knowledge_graph
+    ports:
+      - "5432:5432"
+    volumes:
+      - knowledge_data:/var/lib/postgresql/data
+      - ./schema.sql:/schema/schema.sql:ro
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge_graph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - knowledge-net
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: knowledge-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@localhost
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "5050:5050"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
+    networks:
+      - knowledge-net
+    profiles:
+      - admin  # Only start with: docker-compose --profile admin up -d
+
+volumes:
+  knowledge_data:
+    name: knowledge_graph_data
+  pgadmin_data:
+    name: knowledge_pgadmin_data
+
+networks:
+  knowledge-net:
+    name: knowledge-network

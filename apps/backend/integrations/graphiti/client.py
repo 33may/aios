@@ -1,39 +1,46 @@
 """
 Graphiti Client Wrapper
 
-Provides a high-level Python client for interacting with the Graphiti knowledge
-graph backend. Handles connection management, query execution, and CRUD operations
-for nodes and edges.
+Provides a high-level Python client for interacting with the knowledge graph.
+Supports multiple storage backends (memory, PostgreSQL) with a unified API.
 """
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import logging
 from datetime import datetime
 
-from .config import GraphitiConfig
+from .config import GraphitiConfig, BackendType
 from .models import Node, Edge
+from .backends.base import StorageBackend
+from .backends.memory import MemoryBackend
 
 logger = logging.getLogger(__name__)
 
 
 class GraphitiClient:
     """
-    High-level client for the Graphiti knowledge graph.
+    High-level client for the knowledge graph.
 
-    This client provides a Pythonic interface for interacting with the Graphiti
-    backend, abstracting away low-level connection details and providing
-    convenient methods for common operations.
+    Provides a unified interface for interacting with the knowledge graph
+    regardless of the underlying storage backend.
 
-    Attributes:
-        config: The configuration for this client instance
-        _connected: Whether the client is currently connected
+    Supports:
+    - Memory backend (for testing, no persistence)
+    - PostgreSQL + pgvector backend (for production)
 
     Example:
+        >>> # In-memory (default)
         >>> client = GraphitiClient()
         >>> client.connect()
-        >>> node = Node(type="project", content="My AIOS Project")
+
+        >>> # PostgreSQL
+        >>> config = GraphitiConfig.for_postgres(host="192.168.1.100", password="secret")
+        >>> client = GraphitiClient(config)
+        >>> client.connect()
+
+        >>> # Add nodes
+        >>> node = Node(type="decision", content="Use PostgreSQL for persistence")
         >>> client.add_node(node)
-        >>> client.disconnect()
     """
 
     def __init__(self, config: Optional[GraphitiConfig] = None):
@@ -45,58 +52,71 @@ class GraphitiClient:
                    default configuration from environment variables.
         """
         self.config = config or GraphitiConfig()
-        self._connected = False
-        self._driver = None
-        self._nodes: Dict[str, Node] = {}
-        self._edges: Dict[str, Edge] = {}
-        logger.info(f"Initialized GraphitiClient with host={self.config.host}")
+        self._backend: Optional[StorageBackend] = None
+        self._create_backend()
+        logger.info(f"Initialized GraphitiClient with backend={self.config.backend.value}")
+
+    def _create_backend(self) -> None:
+        """Create the appropriate storage backend based on configuration."""
+        if self.config.backend == BackendType.MEMORY:
+            self._backend = MemoryBackend()
+
+        elif self.config.backend == BackendType.POSTGRES:
+            from .backends.postgres import PostgresBackend
+            self._backend = PostgresBackend(
+                host=self.config.host,
+                port=self.config.port,
+                database=self.config.database,
+                user=self.config.user,
+                password=self.config.password,
+                embedding_dim=self.config.embedding_dim,
+            )
+
+        elif self.config.backend == BackendType.NEO4J:
+            from .backends.neo4j import Neo4jBackend
+            self._backend = Neo4jBackend(
+                uri=self.config.neo4j_uri,
+                user=self.config.neo4j_user,
+                password=self.config.neo4j_password,
+                database=self.config.neo4j_database,
+                embedding_dim=self.config.embedding_dim,
+            )
+
+        else:
+            raise ValueError(f"Unsupported backend type: {self.config.backend}")
 
     def connect(self) -> None:
         """
-        Establish a connection to the Graphiti backend.
+        Establish a connection to the storage backend.
 
         Raises:
-            ConnectionError: If unable to connect to the server
+            ConnectionError: If unable to connect
         """
-        if self._connected:
+        if self._backend.is_connected():
             logger.warning("Client is already connected")
             return
 
         try:
-            logger.info(f"Connecting to Graphiti at {self.config.connection_string}")
-            # TODO: Implement actual connection logic with Neo4j/LadybugDB driver
-            self._connected = True
-            logger.info("Successfully connected to Graphiti")
+            self._backend.connect()
+            logger.info(f"Connected to {self.config.backend.value} backend")
         except Exception as e:
-            logger.error(f"Failed to connect to Graphiti: {e}")
-            raise ConnectionError(f"Unable to connect to Graphiti: {e}")
+            logger.error(f"Failed to connect: {e}")
+            raise ConnectionError(f"Unable to connect to backend: {e}")
 
     def disconnect(self) -> None:
-        """
-        Close the connection to the Graphiti backend.
-        """
-        if not self._connected:
+        """Close the connection to the storage backend."""
+        if not self._backend.is_connected():
             logger.warning("Client is not connected")
             return
 
-        try:
-            logger.info("Disconnecting from Graphiti")
-            # TODO: Implement actual disconnection logic
-            if self._driver:
-                self._driver = None
-            self._connected = False
-            logger.info("Successfully disconnected from Graphiti")
-        except Exception as e:
-            logger.error(f"Error during disconnect: {e}")
+        self._backend.disconnect()
+        logger.info("Disconnected from backend")
 
     def is_connected(self) -> bool:
-        """
-        Check if the client is currently connected.
+        """Check if the client is currently connected."""
+        return self._backend.is_connected()
 
-        Returns:
-            True if connected, False otherwise
-        """
-        return self._connected
+    # Node operations
 
     def add_node(self, node: Node) -> str:
         """
@@ -109,15 +129,10 @@ class GraphitiClient:
             The UUID of the created node
 
         Raises:
-            ConnectionError: If not connected to the server
-            ValueError: If the node is invalid
+            ConnectionError: If not connected
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Adding node: type={node.type}, uuid={node.uuid}")
-        self._nodes[node.uuid] = node
-        return node.uuid
+        self._ensure_connected()
+        return self._backend.add_node(node)
 
     def create_node(self, node: Node) -> Node:
         """
@@ -128,17 +143,86 @@ class GraphitiClient:
 
         Returns:
             The created node object
-
-        Raises:
-            ConnectionError: If not connected to the server
-            ValueError: If the node is invalid
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Creating node: type={node.type}, uuid={node.uuid}")
-        self._nodes[node.uuid] = node
+        self._ensure_connected()
+        self._backend.add_node(node)
         return node
+
+    def get_node(self, node_id: str) -> Optional[Node]:
+        """
+        Retrieve a node by its UUID.
+
+        Args:
+            node_id: The UUID of the node to retrieve
+
+        Returns:
+            The node if found, None otherwise
+        """
+        self._ensure_connected()
+        return self._backend.get_node(node_id)
+
+    def update_node(self, node_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update a node's properties.
+
+        Args:
+            node_id: The UUID of the node to update
+            updates: Dictionary of fields to update
+
+        Returns:
+            True if updated, False if node not found
+        """
+        self._ensure_connected()
+        return self._backend.update_node(node_id, updates)
+
+    def delete_node(self, node_id: str) -> bool:
+        """
+        Delete a node and its connected edges.
+
+        Args:
+            node_id: The UUID of the node to delete
+
+        Returns:
+            True if deleted, False if node not found
+        """
+        self._ensure_connected()
+        return self._backend.delete_node(node_id)
+
+    def query_nodes(self, filters: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Node]:
+        """
+        Query nodes with optional filters.
+
+        Args:
+            filters: Optional filter criteria (e.g., {"type": "decision"})
+            limit: Maximum number of nodes to return
+
+        Returns:
+            List of nodes matching the filters
+        """
+        self._ensure_connected()
+        return self._backend.query_nodes(filters, limit)
+
+    def query_nodes_by_time(
+        self,
+        start: datetime,
+        end: datetime,
+        node_type: Optional[str] = None,
+    ) -> List[Node]:
+        """
+        Query nodes within a time range.
+
+        Args:
+            start: Start of time range
+            end: End of time range
+            node_type: Optional type filter
+
+        Returns:
+            List of nodes in the time range
+        """
+        self._ensure_connected()
+        return self._backend.query_nodes_by_time(start, end, node_type)
+
+    # Edge operations
 
     def add_edge(self, edge: Edge) -> str:
         """
@@ -149,17 +233,9 @@ class GraphitiClient:
 
         Returns:
             The UUID of the created edge
-
-        Raises:
-            ConnectionError: If not connected to the server
-            ValueError: If the edge is invalid
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Adding edge: type={edge.type}, source={edge.source_id}, target={edge.target_id}")
-        self._edges[edge.uuid] = edge
-        return edge.uuid
+        self._ensure_connected()
+        return self._backend.add_edge(edge)
 
     def create_edge(self, edge: Edge) -> Edge:
         """
@@ -170,16 +246,9 @@ class GraphitiClient:
 
         Returns:
             The created edge object
-
-        Raises:
-            ConnectionError: If not connected to the server
-            ValueError: If the edge is invalid
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Creating edge: type={edge.type}, source={edge.source_id}, target={edge.target_id}")
-        self._edges[edge.uuid] = edge
+        self._ensure_connected()
+        self._backend.add_edge(edge)
         return edge
 
     def get_edge(self, edge_id: str) -> Optional[Edge]:
@@ -191,48 +260,9 @@ class GraphitiClient:
 
         Returns:
             The edge if found, None otherwise
-
-        Raises:
-            ConnectionError: If not connected to the server
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Retrieving edge: {edge_id}")
-        return self._edges.get(edge_id)
-
-    def update_edge(self, edge_id: str, updates: Dict[str, Any]) -> Optional[Edge]:
-        """
-        Update an existing edge's metadata.
-
-        Args:
-            edge_id: The UUID of the edge to update
-            updates: Dictionary of fields to update
-
-        Returns:
-            The updated edge if found, None otherwise
-
-        Raises:
-            ConnectionError: If not connected to the server
-        """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        edge = self._edges.get(edge_id)
-        if not edge:
-            logger.warning(f"Edge not found: {edge_id}")
-            return None
-
-        logger.info(f"Updating edge: {edge_id}")
-        # Update metadata fields
-        if 'metadata' in updates:
-            if edge.metadata is None:
-                edge.metadata = {}
-            edge.metadata.update(updates['metadata'])
-        # Update timestamp
-        edge.updated_at = datetime.utcnow()
-
-        return edge
+        self._ensure_connected()
+        return self._backend.get_edge(edge_id)
 
     def delete_edge(self, edge_id: str) -> bool:
         """
@@ -242,96 +272,75 @@ class GraphitiClient:
             edge_id: The UUID of the edge to delete
 
         Returns:
-            True if the edge was deleted, False if not found
-
-        Raises:
-            ConnectionError: If not connected to the server
+            True if deleted, False if edge not found
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
+        self._ensure_connected()
+        return self._backend.delete_edge(edge_id)
 
-        if edge_id in self._edges:
-            logger.info(f"Deleting edge: {edge_id}")
-            del self._edges[edge_id]
-            return True
-
-        logger.warning(f"Edge not found for deletion: {edge_id}")
-        return False
-
-    def query_edges(self, filters: Dict[str, Any]) -> List[Edge]:
+    def query_edges(self, filters: Optional[Dict[str, Any]] = None, limit: int = 100) -> List[Edge]:
         """
-        Query edges based on filters.
+        Query edges with optional filters.
 
         Args:
-            filters: Dictionary of filter criteria (e.g., {"type": "contains"})
+            filters: Optional filter criteria (e.g., {"type": "contains"})
+            limit: Maximum number of edges to return
 
         Returns:
             List of edges matching the filters
-
-        Raises:
-            ConnectionError: If not connected to the server
         """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
+        self._ensure_connected()
+        return self._backend.query_edges(filters, limit)
 
-        logger.info(f"Querying edges with filters: {filters}")
+    # Search operations
 
-        results = []
-        for edge in self._edges.values():
-            match = True
-            for key, value in filters.items():
-                if key == 'type' and edge.type != value:
-                    match = False
-                    break
-                elif key == 'source_id' and edge.source_id != value:
-                    match = False
-                    break
-                elif key == 'target_id' and edge.target_id != value:
-                    match = False
-                    break
-            if match:
-                results.append(edge)
-
-        return results
-
-    def get_node(self, node_id: str) -> Optional[Node]:
+    def search_similar(
+        self,
+        embedding: List[float],
+        limit: int = 10,
+        min_score: float = 0.0,
+    ) -> List[Tuple[Node, float]]:
         """
-        Retrieve a node by its UUID.
+        Search for nodes similar to the given embedding.
 
         Args:
-            node_id: The UUID of the node to retrieve
+            embedding: The query embedding vector
+            limit: Maximum number of results
+            min_score: Minimum similarity score (0-1)
 
         Returns:
-            The node if found, None otherwise
-
-        Raises:
-            ConnectionError: If not connected to the server
+            List of (node, score) tuples sorted by similarity
         """
-        if not self._connected:
+        self._ensure_connected()
+        return self._backend.search_similar(embedding, limit, min_score)
+
+    # Legacy compatibility - expose internal storage for queries.py
+    # TODO: Migrate queries.py to use client methods instead
+
+    @property
+    def _nodes(self) -> Dict[str, Node]:
+        """Legacy access to nodes storage (for backward compatibility)."""
+        if hasattr(self._backend, '_nodes'):
+            return self._backend._nodes
+        # For PostgreSQL backend, fetch all nodes (not recommended for large DBs)
+        logger.warning("Accessing _nodes on non-memory backend - fetching all nodes")
+        nodes = self._backend.query_nodes(limit=10000)
+        return {n.uuid: n for n in nodes}
+
+    @property
+    def _edges(self) -> Dict[str, Edge]:
+        """Legacy access to edges storage (for backward compatibility)."""
+        if hasattr(self._backend, '_edges'):
+            return self._backend._edges
+        logger.warning("Accessing _edges on non-memory backend - fetching all edges")
+        edges = self._backend.query_edges(limit=10000)
+        return {e.uuid: e for e in edges}
+
+    # Helper methods
+
+    def _ensure_connected(self) -> None:
+        """Ensure we have an active connection."""
+        if not self._backend.is_connected():
             raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Retrieving node: {node_id}")
-        return self._nodes.get(node_id)
-
-    def query_nodes(self, filters: Dict[str, Any]) -> List[Node]:
-        """
-        Query nodes based on filters.
-
-        Args:
-            filters: Dictionary of filter criteria (e.g., {"type": "project"})
-
-        Returns:
-            List of nodes matching the filters
-
-        Raises:
-            ConnectionError: If not connected to the server
-        """
-        if not self._connected:
-            raise ConnectionError("Client is not connected. Call connect() first.")
-
-        logger.info(f"Querying nodes with filters: {filters}")
-        # TODO: Implement actual node query
-        return []
 
     def __enter__(self):
         """Context manager entry."""
@@ -344,5 +353,5 @@ class GraphitiClient:
 
     def __repr__(self) -> str:
         """String representation of the client."""
-        status = "connected" if self._connected else "disconnected"
-        return f"GraphitiClient(host={self.config.host}, status={status})"
+        status = "connected" if self.is_connected() else "disconnected"
+        return f"GraphitiClient(backend={self.config.backend.value}, status={status})"

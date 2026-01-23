@@ -1,7 +1,22 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git clone:*)"
+      "Bash(git clone:*)",
+      "Bash(python3:*)",
+      "mcp__knowledge__initialize_session",
+      "mcp__knowledge__list_projects"
+    ]
+  },
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/may/miniconda3/envs/management_agent/bin/python /home/may/projects/management_agent/apps/mcp/hooks/capture_session.py"
+          }
+        ]
+      }
     ]
   }
 }

@@ -1,0 +1,19 @@
+#!/bin/bash
+# Launch the Knowledge Graph Dashboard
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+cd "$PROJECT_DIR"
+
+# Check if streamlit is installed
+if ! command -v streamlit &> /dev/null; then
+    echo "Streamlit not found. Installing..."
+    pip install streamlit
+fi
+
+echo "Starting Knowledge Graph Dashboard..."
+echo "Open http://localhost:8501 in your browser"
+echo ""
+
+streamlit run apps/dashboard/app.py --server.headless true

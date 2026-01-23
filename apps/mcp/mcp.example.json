@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "knowledge": {
+      "command": "python",
+      "args": ["-m", "apps.mcp.knowledge_server"],
+      "cwd": "/home/may/projects/management_agent"
+    }
+  }
+}
