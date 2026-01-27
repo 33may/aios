@@ -16,6 +16,12 @@ class NodeType(str, Enum):
     The schema supports flexible hierarchy where nodes CAN have parents
     but are not required to - avoiding forced hierarchies while enabling
     scoped queries.
+
+    Categories:
+    - Structural: project, session
+    - Work items: task, idea
+    - Knowledge capture: decision, discovery, note
+    - Reasoning: thought, constraint, problem, fix, resource
     """
 
     PROJECT = "project"
@@ -39,6 +45,22 @@ class NodeType(str, Enum):
     NOTE = "note"
     """A general note or piece of information"""
 
+    # Reasoning and knowledge-centric types
+    THOUGHT = "thought"
+    """A reasoning step, observation, or chain of thought during analysis"""
+
+    CONSTRAINT = "constraint"
+    """A user preference or requirement that shapes decisions"""
+
+    PROBLEM = "problem"
+    """An issue or bug encountered during work"""
+
+    FIX = "fix"
+    """A solution to a problem"""
+
+    RESOURCE = "resource"
+    """A file, URL, spec, or external reference"""
+
 
 class EdgeType(str, Enum):
     """
@@ -49,6 +71,7 @@ class EdgeType(str, Enum):
     - Associative: Cross-references and related content
     - Semantic: Domain-specific relationships
     - Temporal: Time-based sequencing
+    - Causal: Reasoning chains and evidence relationships
     """
 
     # Structural edges
@@ -75,6 +98,25 @@ class EdgeType(str, Enum):
     # Temporal edges
     PRECEDED_BY = "preceded_by"
     """Sequential ordering (this node came after another)"""
+
+    # Causal/reasoning edges
+    LED_TO = "led_to"
+    """Causal chain (e.g., thought led_to decision)"""
+
+    SUPPORTS = "supports"
+    """Evidence for (e.g., discovery supports decision)"""
+
+    CONTRADICTS = "contradicts"
+    """Evidence against (e.g., thought contradicts option)"""
+
+    REFINED_BY = "refined_by"
+    """Evolved thinking (e.g., thought refined_by thought)"""
+
+    CONSTRAINED_BY = "constrained_by"
+    """Limited by user preference (e.g., decision constrained_by constraint)"""
+
+    FIXED_BY = "fixed_by"
+    """Problem solved by (e.g., problem fixed_by fix)"""
 
 
 # Context Metadata Field Constants

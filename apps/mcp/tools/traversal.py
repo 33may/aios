@@ -1,17 +1,23 @@
 """
-Graph traversal tools for the knowledge graph.
+Graph traversal and linking tools for the knowledge graph.
 
-Supports optimized traversal for Neo4j backend using native Cypher queries.
+Supports optimized traversal for Neo4j backend using native Cypher queries,
+and creating edges between existing nodes.
 """
 
 from typing import Any, Dict, List, Optional
 import logging
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.models import Edge
 from apps.backend.integrations.graphiti.queries import traverse, get_related
 from apps.backend.integrations.graphiti.config import BackendType
+from apps.backend.integrations.graphiti.schema import EdgeType
 
 logger = logging.getLogger(__name__)
+
+# Valid edge types for link_nodes
+VALID_EDGE_TYPES = [e.value for e in EdgeType]
 
 
 def _truncate_content(content: str, max_length: int = 200) -> str:
@@ -191,4 +197,86 @@ async def _traverse_generic(
         "direct_relationships": relationships,
         "traversal_depth": depth,
         "success": True,
+    }
+
+
+async def link_nodes(
+    client: GraphitiClient,
+    source_id: str,
+    target_id: str,
+    edge_type: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Create an edge between two existing nodes.
+
+    Use this to establish relationships in reasoning chains:
+    - thought --led_to--> decision
+    - discovery --supports--> decision
+    - constraint --constrained_by--> decision
+    - problem --fixed_by--> fix
+    - thought --refined_by--> thought
+
+    Args:
+        client: The GraphitiClient instance
+        source_id: UUID of the source node
+        target_id: UUID of the target node
+        edge_type: Type of edge (led_to, supports, contradicts, refined_by,
+                   constrained_by, fixed_by, contains, references, related_to, etc.)
+        metadata: Optional additional properties for the edge
+
+    Returns:
+        Dictionary with the created edge ID and details
+    """
+    logger.info(f"link_nodes: {source_id} --{edge_type}--> {target_id}")
+
+    # Validate edge type
+    if edge_type not in VALID_EDGE_TYPES:
+        return {
+            "success": False,
+            "error": f"Invalid edge type: {edge_type}. Valid types: {VALID_EDGE_TYPES}",
+        }
+
+    # Validate source node exists
+    source_node = client.get_node(source_id)
+    if not source_node:
+        return {
+            "success": False,
+            "error": f"Source node not found: {source_id}",
+        }
+
+    # Validate target node exists
+    target_node = client.get_node(target_id)
+    if not target_node:
+        return {
+            "success": False,
+            "error": f"Target node not found: {target_id}",
+        }
+
+    # Create the edge
+    edge = Edge(
+        type=edge_type,
+        source_id=source_id,
+        target_id=target_id,
+        metadata=metadata or {},
+    )
+
+    edge_id = client.add_edge(edge)
+    logger.info(f"Created edge: {edge_id}")
+
+    return {
+        "success": True,
+        "edge_id": edge_id,
+        "edge_type": edge_type,
+        "source": {
+            "id": source_node.uuid,
+            "type": source_node.type,
+            "content": _truncate_content(source_node.content),
+        },
+        "target": {
+            "id": target_node.uuid,
+            "type": target_node.type,
+            "content": _truncate_content(target_node.content),
+        },
+        "created_at": edge.created_at.isoformat(),
     }

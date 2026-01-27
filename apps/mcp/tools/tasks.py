@@ -288,6 +288,7 @@ async def update_task(
     task_id: str,
     status: Optional[str] = None,
     description: Optional[str] = None,
+    parent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Update an existing task in the knowledge graph.
@@ -297,11 +298,12 @@ async def update_task(
         task_id: The ID of the task to update
         status: New status (optional)
         description: New description (optional)
+        parent_id: New parent task/project ID to move under (optional)
 
     Returns:
         Dictionary with success status
     """
-    logger.info(f"update_task: task_id={task_id}, status={status}")
+    logger.info(f"update_task: task_id={task_id}, status={status}, parent_id={parent_id}")
 
     # Get the existing task
     node = client.get_node(task_id)
@@ -323,6 +325,46 @@ async def update_task(
         node.metadata["description"] = description
         node.content = f"{node.metadata.get('subject', '')}\n\n{description}"
 
+    # Handle parent_id change (move task)
+    old_parent_id = node.metadata.get("parent_id")
+    if parent_id is not None and parent_id != old_parent_id:
+        # Verify new parent exists
+        new_parent = client.get_node(parent_id)
+        if not new_parent:
+            return {
+                "success": False,
+                "error": f"New parent not found: {parent_id}",
+            }
+
+        # Remove old CONTAINS edges pointing to this task
+        all_edges = client.query_edges(filters={"type": "contains"}, limit=1000)
+        for edge in all_edges:
+            if edge.target_id == task_id:
+                client.delete_edge(edge.uuid)
+                logger.info(f"Deleted old CONTAINS edge {edge.uuid} from {edge.source_id}")
+
+        # Update parent_id in metadata
+        node.metadata["parent_id"] = parent_id
+
+        # Inherit project_id from new parent if it has one
+        if new_parent.metadata and new_parent.metadata.get("project_id"):
+            node.metadata["project_id"] = new_parent.metadata.get("project_id")
+        elif new_parent.type == "project":
+            node.metadata["project_id"] = parent_id
+
+        # Recalculate depth
+        node.metadata["depth"] = _calculate_depth(client, parent_id, node.metadata.get("project_id"))
+
+        # Create new CONTAINS edge from new parent
+        from apps.backend.integrations.graphiti.models import Edge
+        edge = Edge(
+            type="contains",
+            source_id=parent_id,
+            target_id=task_id,
+        )
+        client.add_edge(edge)
+        logger.info(f"Created CONTAINS edge from new parent {parent_id}")
+
     node.updated_at = datetime.utcnow()
 
     logger.info(f"Updated task: {task_id}")
@@ -330,6 +372,86 @@ async def update_task(
     return {
         "task_id": task_id,
         "status": node.metadata.get("status"),
+        "parent_id": node.metadata.get("parent_id"),
+        "depth": node.metadata.get("depth"),
         "updated_at": node.updated_at.isoformat(),
         "success": True,
     }
+
+
+async def delete_task(
+    client: GraphitiClient,
+    task_id: str,
+    delete_subtasks: bool = False,
+) -> Dict[str, Any]:
+    """
+    Delete a task from the knowledge graph.
+
+    Args:
+        client: The GraphitiClient instance
+        task_id: The ID of the task to delete
+        delete_subtasks: If True, also delete all subtasks (default: False)
+
+    Returns:
+        Dictionary with success status and deleted count
+    """
+    logger.info(f"delete_task: task_id={task_id}, delete_subtasks={delete_subtasks}")
+
+    # Get the existing task
+    node = client.get_node(task_id)
+    if not node:
+        logger.warning(f"Task not found: {task_id}")
+        return {
+            "success": False,
+            "error": f"Task not found: {task_id}",
+        }
+
+    if node.type != "task":
+        logger.warning(f"Node is not a task: {task_id} (type={node.type})")
+        return {
+            "success": False,
+            "error": f"Node is not a task: {task_id} (type={node.type})",
+        }
+
+    deleted_ids = []
+
+    # If delete_subtasks, find and delete all children first
+    if delete_subtasks:
+        # Get all tasks and find subtasks
+        all_tasks = client.query_nodes(filters={"type": "task"}, limit=1000)
+        subtasks_to_delete = []
+
+        def find_subtasks(parent_id: str):
+            """Recursively find all subtasks."""
+            for t in all_tasks:
+                if t.metadata and t.metadata.get("parent_id") == parent_id:
+                    subtasks_to_delete.append(t.uuid)
+                    find_subtasks(t.uuid)
+
+        find_subtasks(task_id)
+
+        # Delete subtasks (deepest first to avoid orphans)
+        for subtask_id in reversed(subtasks_to_delete):
+            if client.delete_node(subtask_id):
+                deleted_ids.append(subtask_id)
+                logger.info(f"Deleted subtask: {subtask_id}")
+
+    # Delete the main task
+    subject = node.metadata.get("subject", "") if node.metadata else ""
+    if client.delete_node(task_id):
+        deleted_ids.append(task_id)
+        logger.info(f"Deleted task: {task_id}")
+        return {
+            "success": True,
+            "task_id": task_id,
+            "subject": subject,
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+        }
+    else:
+        return {
+            "success": False,
+            "error": f"Failed to delete task: {task_id}",
+            "deleted_count": len(deleted_ids),
+            "deleted_ids": deleted_ids,
+        }

@@ -1,5 +1,8 @@
 """
 Decision management tools for the knowledge graph.
+
+Provides context-aware decision recording that automatically links to
+collected constraints and the current focus node.
 """
 
 from typing import Any, Dict, List, Optional
@@ -9,6 +12,12 @@ import logging
 from apps.backend.integrations.graphiti.client import GraphitiClient
 from apps.backend.integrations.graphiti.models import Node, Edge
 from apps.backend.integrations.graphiti.queries import query_temporal_nodes
+from apps.mcp.tools.context import (
+    _get_focus,
+    _set_focus,
+    _get_reasoning_context,
+    _update_reasoning_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +87,20 @@ async def record_decision(
     alternatives: Optional[List[str]] = None,
     context: Optional[str] = None,
     project_id: Optional[str] = None,
+    use_context: bool = True,
+    parent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Record a new decision to the knowledge graph.
+
+    When use_context=True, the decision will:
+    - Link to the current focus node via 'led_to' edge (reasoning led to decision)
+    - Auto-link to all collected constraints via 'constrained_by' edges
+    - Clear the constraints_collected list after linking
+    - Become the new focus for subsequent nodes
+
+    This creates rich reasoning chains like:
+    Thought -> Thought -> Constraint -> Decision
 
     Args:
         client: The GraphitiClient instance
@@ -89,9 +109,11 @@ async def record_decision(
         alternatives: What other options were considered
         context: What prompted this decision
         project_id: Optional project ID to associate with
+        use_context: If True (default), auto-link to focus, constraints, and become new focus
+        parent_id: Explicit parent node ID (overrides focus if provided)
 
     Returns:
-        Dictionary with the created decision ID
+        Dictionary with the created decision ID and link info
     """
     logger.info(f"record_decision: title='{title}'")
 
@@ -110,12 +132,69 @@ async def record_decision(
 
     # Add to graph
     decision_id = client.add_node(node)
-
     logger.info(f"Created decision node: {decision_id}")
 
-    return {
+    result = {
         "decision_id": decision_id,
         "title": title,
         "created_at": node.created_at.isoformat(),
         "success": True,
     }
+
+    if use_context:
+        # Get parent (explicit or from focus)
+        parent = None
+        if parent_id:
+            parent_node = client.get_node(parent_id)
+            if parent_node:
+                parent = (parent_id, parent_node.type)
+        else:
+            parent = _get_focus(client)
+
+        if parent:
+            # Create edge: parent --led_to--> decision
+            edge = Edge(
+                type="led_to",
+                source_id=parent[0],
+                target_id=decision_id,
+            )
+            edge_id = client.add_edge(edge)
+            logger.info(f"Created led_to edge from {parent[0]} to decision: {edge_id}")
+            result["parent_id"] = parent[0]
+            result["parent_type"] = parent[1]
+            result["led_to_edge_id"] = edge_id
+
+        # Link all collected constraints
+        ctx = _get_reasoning_context(client)
+        constraints = ctx.get("constraints_collected", [])
+        constraint_edges = []
+
+        for constraint_id in constraints:
+            # Verify constraint exists
+            constraint_node = client.get_node(constraint_id)
+            if constraint_node:
+                # Create edge: decision --constrained_by--> constraint
+                edge = Edge(
+                    type="constrained_by",
+                    source_id=decision_id,
+                    target_id=constraint_id,
+                )
+                edge_id = client.add_edge(edge)
+                constraint_edges.append({
+                    "constraint_id": constraint_id,
+                    "edge_id": edge_id,
+                })
+                logger.info(f"Created constrained_by edge to constraint {constraint_id}: {edge_id}")
+
+        if constraint_edges:
+            result["constrained_by_edges"] = constraint_edges
+            result["constraints_linked"] = len(constraint_edges)
+
+        # Clear collected constraints
+        _update_reasoning_context(client, {"constraints_collected": []})
+
+        # Set decision as the new focus
+        _set_focus(client, decision_id, "decision")
+        result["is_focus"] = True
+
+    return result

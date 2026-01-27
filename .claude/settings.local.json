@@ -4,10 +4,54 @@
       "Bash(git clone:*)",
       "Bash(python3:*)",
       "mcp__knowledge__initialize_session",
-      "mcp__knowledge__list_projects"
+      "mcp__knowledge__list_projects",
+      "mcp__knowledge__add_thought",
+      "mcp__knowledge__get_project_context",
+      "mcp__knowledge__get_recent_activity",
+      "Bash(git add:*)"
     ]
   },
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/may/miniconda3/envs/management_agent/bin/python /home/may/projects/management_agent/apps/mcp/hooks/knowledge_reminder.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/may/miniconda3/envs/management_agent/bin/python /home/may/projects/management_agent/apps/mcp/hooks/knowledge_reminder.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/may/miniconda3/envs/management_agent/bin/python /home/may/projects/management_agent/apps/mcp/hooks/pretool_thought_reminder.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/may/miniconda3/envs/management_agent/bin/python /home/may/projects/management_agent/apps/mcp/hooks/stop_thought_capture.py"
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

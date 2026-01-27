@@ -38,9 +38,9 @@ from mcp.types import Tool, TextContent
 from apps.backend.integrations.graphiti.client import GraphitiClient
 from apps.mcp.tools.search import search_knowledge, get_project_context
 from apps.mcp.tools.decisions import get_decisions, record_decision
-from apps.mcp.tools.tasks import get_tasks, add_task, update_task
-from apps.mcp.tools.activity import get_recent_activity, add_discovery
-from apps.mcp.tools.traversal import traverse_related
+from apps.mcp.tools.tasks import get_tasks, add_task, update_task, delete_task
+from apps.mcp.tools.activity import get_recent_activity, add_discovery, add_thought, add_problem, add_fix
+from apps.mcp.tools.traversal import traverse_related, link_nodes
 from apps.mcp.tools.session import initialize_session
 from apps.mcp.tools.context import (
     get_context,
@@ -48,6 +48,10 @@ from apps.mcp.tools.context import (
     create_project,
     list_projects,
     get_task_tree,
+    add_constraint,
+    set_focus,
+    clear_focus,
+    get_reasoning_context,
 )
 
 # Configure logging
@@ -187,7 +191,7 @@ TOOLS = [
     ),
     Tool(
         name="record_decision",
-        description="Record a new architectural or design decision. Use this when making important choices that should be remembered with their rationale.",
+        description="Record a new architectural or design decision. When use_context=true (default), links to focus via 'led_to', auto-links all collected constraints via 'constrained_by', and becomes new focus.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -211,6 +215,15 @@ TOOLS = [
                 "project_id": {
                     "type": "string",
                     "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to focus, constraints, and become new focus",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
                 },
             },
             "required": ["title", "rationale"],
@@ -260,7 +273,7 @@ TOOLS = [
     ),
     Tool(
         name="update_task",
-        description="Update an existing task's status or description. Use this to mark tasks as in progress, completed, or blocked.",
+        description="Update an existing task's status, description, or parent. Use this to mark tasks as in progress, completed, blocked, or to move tasks under a different parent.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -277,13 +290,36 @@ TOOLS = [
                     "type": "string",
                     "description": "New description",
                 },
+                "parent_id": {
+                    "type": "string",
+                    "description": "New parent task or project ID to move this task under",
+                },
+            },
+            "required": ["task_id"],
+        },
+    ),
+    Tool(
+        name="delete_task",
+        description="Delete a task from the knowledge graph. Use with caution - this permanently removes the task. Can optionally delete all subtasks as well.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The ID of the task to delete",
+                },
+                "delete_subtasks": {
+                    "type": "boolean",
+                    "description": "If true, also delete all subtasks recursively (default: false)",
+                    "default": False,
+                },
             },
             "required": ["task_id"],
         },
     ),
     Tool(
         name="add_discovery",
-        description="Record a learning or insight. Use this to capture important findings, realizations, or knowledge gained during work.",
+        description="Record a learning or insight. When use_context=true (default), links to focus via 'led_to' edge (something led to this discovery) and becomes new focus.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -303,6 +339,15 @@ TOOLS = [
                 "project_id": {
                     "type": "string",
                     "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to focus and become new focus",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
                 },
             },
             "required": ["content"],
@@ -436,6 +481,234 @@ TOOLS = [
             "required": ["root_id"],
         },
     ),
+    # Knowledge-centric reasoning tools with context-aware parent linking
+    Tool(
+        name="add_thought",
+        description="Record a reasoning step, observation, or chain of thought. When use_context=true (default), automatically links to current focus node and becomes the new focus, creating traversable reasoning trees.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The thought, observation, or reasoning step",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "What prompted this thought",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags for categorization (e.g., 'reasoning', 'option-analysis', 'investigation')",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to current focus and become new focus",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
+                },
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="add_constraint",
+        description="Record a user preference or requirement that shapes decisions. When use_context=true (default), links to focus, becomes new focus, and collects for auto-linking when decision is made.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The constraint (e.g., 'User prefers desktop app', 'Must use Python 3.10+')",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Where this came from: user, requirement, technical, budget",
+                    "default": "user",
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Priority level: low, medium, high, must-have",
+                    "enum": ["low", "medium", "high", "must-have"],
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags for categorization",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to focus and collect for decision linking",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
+                },
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="add_problem",
+        description="Record a problem or issue encountered. When use_context=true (default), links to focus, becomes new focus, and tracks as active_problem_id (auto-linked when add_fix is called).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Description of the problem",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Where/when the problem was encountered",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "Severity level",
+                    "enum": ["low", "medium", "high", "critical"],
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags for categorization (e.g., 'bug', 'blocker', 'config')",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to focus and track as active problem",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
+                },
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="add_fix",
+        description="Record a fix or solution to a problem. When use_context=true (default), auto-links to active_problem_id if no explicit problem_id, links to focus, and clears active problem.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Description of the fix/solution",
+                },
+                "problem_id": {
+                    "type": "string",
+                    "description": "ID of the problem this fixes. If not provided and use_context=true, uses active_problem_id",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Additional context about the fix",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags (e.g., 'workaround', 'permanent-fix', 'config-change')",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project ID to associate with",
+                },
+                "use_context": {
+                    "type": "boolean",
+                    "description": "If true (default), auto-link to active problem and focus",
+                    "default": True,
+                },
+                "parent_id": {
+                    "type": "string",
+                    "description": "Explicit parent node ID (overrides current focus)",
+                },
+            },
+            "required": ["content"],
+        },
+    ),
+    Tool(
+        name="link_nodes",
+        description="Create an edge between two existing nodes. Use this to build reasoning chains: thought->decision, discovery->supports->decision, constraint->constrained_by->decision, problem->fixed_by->fix.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "description": "UUID of the source node",
+                },
+                "target_id": {
+                    "type": "string",
+                    "description": "UUID of the target node",
+                },
+                "edge_type": {
+                    "type": "string",
+                    "description": "Type of relationship",
+                    "enum": [
+                        "led_to", "supports", "contradicts", "refined_by",
+                        "constrained_by", "fixed_by", "contains", "references",
+                        "related_to", "spawned", "blocked_by"
+                    ],
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional additional properties for the edge",
+                },
+            },
+            "required": ["source_id", "target_id", "edge_type"],
+        },
+    ),
+    # Focus management tools for context-aware reasoning
+    Tool(
+        name="set_focus",
+        description="Set focus to a specific node for automatic parent-based linking. Subsequent reasoning nodes will link to this as their parent, creating traversable reasoning trees.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "string",
+                    "description": "UUID of the node to focus on (task, problem, thought, etc.)",
+                },
+            },
+            "required": ["node_id"],
+        },
+    ),
+    Tool(
+        name="clear_focus",
+        description="Clear the current focus to stop automatic parent-based linking. New reasoning nodes will not auto-link.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "keep_problem": {
+                    "type": "boolean",
+                    "description": "If true, keep active_problem_id for fix linking",
+                    "default": False,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="get_reasoning_context",
+        description="Get the current reasoning context including focus node, active problem, and collected constraints. Useful for debugging or understanding current linking state.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
 ]
 
 
@@ -497,6 +770,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 alternatives=arguments.get("alternatives"),
                 context=arguments.get("context"),
                 project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
             )
 
         elif name == "add_task":
@@ -517,6 +792,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 task_id=arguments["task_id"],
                 status=arguments.get("status"),
                 description=arguments.get("description"),
+                parent_id=arguments.get("parent_id"),
+            )
+
+        elif name == "delete_task":
+            result = await delete_task(
+                client=client,
+                task_id=arguments["task_id"],
+                delete_subtasks=arguments.get("delete_subtasks", False),
             )
 
         elif name == "add_discovery":
@@ -526,6 +809,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 context=arguments.get("context"),
                 tags=arguments.get("tags"),
                 project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
             )
 
         elif name == "get_project_context":
@@ -579,6 +864,81 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 client=client,
                 root_id=arguments["root_id"],
                 max_depth=arguments.get("max_depth", 3),
+            )
+
+        # Knowledge-centric reasoning tools with context-aware parent linking
+        elif name == "add_thought":
+            result = await add_thought(
+                client=client,
+                content=arguments["content"],
+                context=arguments.get("context"),
+                tags=arguments.get("tags"),
+                project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
+            )
+
+        elif name == "add_constraint":
+            result = await add_constraint(
+                client=client,
+                content=arguments["content"],
+                source=arguments.get("source"),
+                priority=arguments.get("priority"),
+                tags=arguments.get("tags"),
+                project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
+            )
+
+        elif name == "add_problem":
+            result = await add_problem(
+                client=client,
+                content=arguments["content"],
+                context=arguments.get("context"),
+                severity=arguments.get("severity"),
+                tags=arguments.get("tags"),
+                project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
+            )
+
+        elif name == "add_fix":
+            result = await add_fix(
+                client=client,
+                content=arguments["content"],
+                problem_id=arguments.get("problem_id"),
+                context=arguments.get("context"),
+                tags=arguments.get("tags"),
+                project_id=arguments.get("project_id"),
+                use_context=arguments.get("use_context", True),
+                parent_id=arguments.get("parent_id"),
+            )
+
+        elif name == "link_nodes":
+            result = await link_nodes(
+                client=client,
+                source_id=arguments["source_id"],
+                target_id=arguments["target_id"],
+                edge_type=arguments["edge_type"],
+                metadata=arguments.get("metadata"),
+            )
+
+        # Focus management tools for context-aware reasoning
+        elif name == "set_focus":
+            result = await set_focus(
+                client=client,
+                node_id=arguments["node_id"],
+            )
+
+        elif name == "clear_focus":
+            result = await clear_focus(
+                client=client,
+                keep_problem=arguments.get("keep_problem", False),
+            )
+
+        elif name == "get_reasoning_context":
+            result = await get_reasoning_context(
+                client=client,
             )
 
         else:

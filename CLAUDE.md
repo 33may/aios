@@ -1,175 +1,272 @@
 # Project: Management Agent
 
-This project has a knowledge graph that stores decisions, tasks, discoveries, and project context.
+This project has a knowledge graph that captures reasoning, decisions, constraints, and problem-solving - not just tasks and outputs.
 
-## ALWAYS Use Knowledge Tools
+## Core Philosophy: Capture the Thinking
 
-**You MUST proactively use the knowledge graph MCP tools during conversations:**
+**Focus on WHY and HOW, not just WHAT:**
+- Record reasoning chains that lead to decisions
+- Capture constraints that shape choices
+- Document problems and how they were fixed
+- Link everything together
 
-### When Starting ANY Implementation Work
-1. **Create a task first** - Before writing code, call `add_task` with:
-   - Clear subject describing what you're building
-   - Description with acceptance criteria
-   - Status: "in_progress"
+## When to Use Knowledge Tools
 
-2. **Search for context** - Call `search_knowledge` to find:
-   - Related past decisions
-   - Similar work done before
-   - Potential gotchas or learnings
-
-### When Making Choices
-**Immediately call `record_decision`** when you:
-- Choose a library/framework/approach
-- Decide on architecture or structure
-- Pick one option over alternatives
-- Decide NOT to do something
-
-Example: "I'll use Neo4j for this" → record_decision with rationale
-
-### When Learning Something
-**Call `add_discovery`** when you:
-- Find a bug or gotcha
-- Learn how something works
-- Discover an undocumented behavior
-- Find a useful pattern
-
-### When Completing Work
-**Call `update_task`** to mark tasks completed with a summary of what was done.
-
-## Proactive Behavior Examples
+### When Analyzing Options
+**Create `thought` nodes** for each option considered:
 
 ```
-User: "Add a caching layer to the API"
+User: "Let's build a better GUI"
 
-You: [FIRST call add_task with subject="Implement API caching layer", status="in_progress"]
-     [THEN call search_knowledge("caching API") to find context]
-
-     "I've created a task to track this work. Let me check for any previous context...
-
-     Found: We discussed Redis vs Memcached last month. Decision was Redis for...
-
-     I'll proceed with Redis. Should I record this as a decision?"
+You: [add_thought: "Evaluated Streamlit - limited interactivity, re-render issues"]
+     [add_thought: "Evaluated Dash + Cytoscape - good for graphs but web-based"]
+     [add_thought: "Evaluated Tauri - lightweight desktop, best UX, Rust backend"]
 ```
 
-```
-User: "Let's use PostgreSQL instead of SQLite"
-
-You: [call record_decision with title="Switch from SQLite to PostgreSQL",
-      rationale="...", alternatives=["SQLite", "MySQL"]]
-
-     "Recorded the decision to switch to PostgreSQL. Now implementing..."
-```
+### When User States a Preference
+**Create a `constraint` node** immediately:
 
 ```
-User: "Hmm, turns out the API has a rate limit of 100/min"
+User: "I prefer desktop apps"
 
-You: [call add_discovery with content="API rate limit is 100 requests/minute",
-      context="Discovered while implementing...", tags=["api", "rate-limit"]]
-
-     "Good to know - I've recorded that for future reference."
+You: [add_constraint: "User prefers desktop applications over web-based solutions"
+      source="user", priority="high"]
 ```
 
-## Two Modes
+### When Making a Decision
+**Create a `decision` node AND link the reasoning:**
 
-### Normal Mode (default)
-Still use knowledge tools proactively as described above.
+```
+You: [record_decision: "Use Tauri + React for GUI"
+      rationale="Best desktop UX, lightweight, Rust backend for performance"]
+     [link_nodes: thought1 --led_to--> decision]
+     [link_nodes: thought2 --led_to--> decision]
+     [link_nodes: constraint --constrained_by--> decision]
+```
 
-### Manager Mode
-When the user says "manager mode", "start session", or "init session":
+### When Hitting a Problem
+**Create a `problem` node** with context:
 
-1. **Call `initialize_session`** immediately
-2. Show summary of context found
-3. Suggest what to work on based on pending tasks
-4. Be extra proactive about searching context before any work
+```
+User: "Dashboard is showing empty"
 
-## Knowledge Graph Tools
+You: [add_problem: "Dashboard showing empty despite Neo4j having data"
+      context="Noticed during GUI testing", severity="high"]
+     [add_thought: "Investigating - checking backend config..."]
+     [add_discovery: ".env file not loaded by boot script"]
+```
+
+### When Fixing Something
+**Create a `fix` node** linked to the problem:
+
+```
+You: [add_fix: "Source .env in boot script before starting dashboard"
+      problem_id=<problem_uuid>]
+     // This automatically creates: problem --fixed_by--> fix
+```
+
+## Node Types
+
+| Type | When to Use | Example |
+|------|-------------|---------|
+| `thought` | Reasoning, analysis, observations | "Evaluated 10 GUI options, Streamlit has re-render issues" |
+| `constraint` | User preference or requirement | "User prefers desktop app" |
+| `decision` | Final choice with rationale | "Use Tauri because..." |
+| `problem` | Issue encountered | "Dashboard showed empty" |
+| `fix` | Solution to a problem | "Updated boot script to source .env" |
+| `discovery` | Learning or insight | "API has undocumented rate limit" |
+| `task` | Work to be done | "Implement caching layer" |
+
+## Edge Types (Linking)
+
+| Edge | Purpose | Example |
+|------|---------|---------|
+| `spawned` | Parent created child (auto-used for thoughts, constraints) | task --spawned--> thought |
+| `led_to` | Reasoning chain / something led to this | thought --led_to--> decision |
+| `supports` | Evidence for | discovery --supports--> decision |
+| `contradicts` | Evidence against | thought --contradicts--> option |
+| `refined_by` | Evolved thinking | thought1 --refined_by--> thought2 |
+| `constrained_by` | Limited by preference | decision --constrained_by--> constraint |
+| `fixed_by` | Problem solved | problem --fixed_by--> fix |
+
+## Knowledge Tools Reference
 
 | Tool | When to Use |
 |------|-------------|
-| `add_task` | **Starting any implementation work** - auto-links to context |
-| `update_task` | Completing work, changing status |
-| `record_decision` | **Any technology/architecture choice** |
-| `add_discovery` | Learning something worth remembering |
-| `search_knowledge` | **Before starting work** - find context |
-| `get_tasks` | See what's pending/in-progress (supports `parent_id` filter) |
-| `get_decisions` | Review past architectural choices |
-| `initialize_session` | Starting manager mode |
-| `traverse_related` | Understanding node relationships |
-| `get_context` | Check current active project/task |
-| `set_context` | **Set active project/task** for context-aware task creation |
-| `create_project` | Create a new project (ask user first!) |
-| `list_projects` | See all available projects |
-| `get_task_tree` | View hierarchical task structure |
+| `add_thought` | Recording reasoning steps, observations, analysis (auto-links to focus) |
+| `add_constraint` | Capturing user preferences, requirements (auto-collected for decisions) |
+| `add_problem` | Documenting issues, bugs, blockers (sets active_problem for fix linking) |
+| `add_fix` | Recording solutions (auto-links to active_problem) |
+| `add_discovery` | Capturing learnings, insights (auto-links via led_to) |
+| `record_decision` | Recording choices (auto-links focus + all collected constraints) |
+| `link_nodes` | Creating custom edges (most linking is automatic now) |
+| `add_task` | Work items (still useful, just not the focus) |
+| `search_knowledge` | Finding context before starting work |
+| `set_focus` | Set focus to a specific node for auto-linking |
+| `clear_focus` | Stop automatic parent-based linking |
+| `get_reasoning_context` | Debug: see focus, active problem, collected constraints |
 
-## Key Rules
+## Example: Full Knowledge-Centric Flow
 
-1. **Task before code** - Always create a task before starting implementation
-2. **Record decisions immediately** - Don't wait, record as you make them
-3. **Search first** - Check for existing context before diving in
-4. **Discoveries are valuable** - Even small learnings are worth recording
+```
+User: "Let's build a better GUI for the knowledge graph"
+
+You: [search_knowledge("GUI knowledge graph") to find context]
+     "Found previous work on dashboards. Let me analyze options..."
+
+     [add_thought: "Considered Streamlit - good for quick prototypes but limited
+      interactivity, full page re-renders on every interaction"]
+
+     [add_thought: "Considered Dash + Cytoscape - excellent graph visualization,
+      but requires running a web server, no native feel"]
+
+     [add_thought: "Considered Tauri with React + vis-network - lightweight
+      desktop app, native feel, good graph libraries available"]
+
+User: "I really want it to feel like a native desktop app, not a browser"
+
+You: [add_constraint: "User requires native desktop feel, not web-based"
+      source="user", priority="must-have"]
+
+     "Got it - desktop feel is a must-have. That rules out Dash..."
+
+     [record_decision: "Use Tauri + React + vis-network for knowledge graph GUI"
+      rationale="Only option that provides native desktop experience while having
+      good graph visualization capabilities"
+      alternatives=["Streamlit", "Dash + Cytoscape", "Electron"]]
+
+     [link_nodes: thought3 --led_to--> decision]
+     [link_nodes: constraint --constrained_by--> decision]
+
+     "Decision recorded. Now let me implement..."
+
+User: "The graph is not showing any nodes"
+
+You: [add_problem: "Graph visualization showing no nodes despite data in Neo4j"
+      context="Testing new Tauri GUI", severity="high"]
+
+     [add_thought: "Checking connection - Neo4j responds to test queries..."]
+     [add_thought: "Found issue - environment variables not loaded"]
+     [add_discovery: "Tauri doesn't inherit shell environment by default"]
+
+     [add_fix: "Load .env file explicitly in Tauri main.rs setup"
+      problem_id=<problem_id>]
+
+     "Fixed! The issue was that Tauri doesn't inherit shell environment variables."
+```
+
+## Context-Aware Reasoning (Auto-Linking)
+
+The system automatically tracks a **focus node** and creates parent-child relationships. You don't need to manually call `link_nodes` for most cases.
+
+### How It Works
+
+1. **Focus tracking**: When you create a reasoning node, it becomes the new focus
+2. **Auto-linking**: New nodes automatically link to the current focus as their parent
+3. **Edge types**: Different node types use appropriate edges (`spawned`, `led_to`, etc.)
+
+This creates traversable reasoning trees:
+```
+Task: "Implement GUI"
+├── Thought: "Evaluating Streamlit..."  (spawned)
+│   ├── Thought: "Streamlit has issues" (spawned)
+│   └── Discovery: "Lacks native feel"  (led_to)
+├── Constraint: "Must be desktop app"   (spawned)
+└── Decision: "Use Tauri"               (led_to + constrained_by)
+    └── Problem: "Graph not rendering"  (led_to)
+        └── Fix: "Load .env in setup"   (fixed_by)
+```
+
+### Auto-Linking Behavior by Tool
+
+| Tool | Links to Parent Via | Also Does |
+|------|---------------------|-----------|
+| `add_thought` | `spawned` | Becomes focus |
+| `add_discovery` | `led_to` | Becomes focus |
+| `add_problem` | `led_to` | Becomes focus + sets active_problem |
+| `add_fix` | `spawned` + `fixed_by` | Links to active_problem, clears it |
+| `add_constraint` | `spawned` | Collected for decision, becomes focus |
+| `record_decision` | `led_to` | Links all collected constraints |
+
+### Focus Management Tools
+
+| Tool | Purpose |
+|------|---------|
+| `set_focus(node_id)` | Jump focus to any node (task, problem, etc.) |
+| `clear_focus()` | Stop auto-linking |
+| `get_reasoning_context()` | See current focus, active problem, collected constraints |
+
+### Opting Out
+
+Pass `use_context=false` to any reasoning tool to skip auto-linking:
+```
+add_thought(content="...", use_context=false)  // Won't link, won't become focus
+```
+
+Or use explicit `parent_id` to override the current focus:
+```
+add_thought(content="...", parent_id="<task-uuid>")  // Links to specific node
+```
+
+### Example: Simplified Flow (No Manual Linking!)
+
+```
+[set_focus(task_id)]  // Focus on a task
+
+[add_thought: "Evaluating Option A"]
+// Auto: task --spawned--> thought1, focus = thought1
+
+[add_thought: "Option A has issues"]
+// Auto: thought1 --spawned--> thought2, focus = thought2
+
+[add_constraint: "Must be fast"]
+// Auto: thought2 --spawned--> constraint, constraint collected
+
+[add_discovery: "Found that B is fastest"]
+// Auto: constraint --led_to--> discovery, focus = discovery
+
+[record_decision: "Use Option B"]
+// Auto: discovery --led_to--> decision
+// Auto: decision --constrained_by--> constraint (all collected)
+```
+
+### Problem-Fix Flow
+
+```
+[add_problem: "Build is failing"]
+// Auto: focus --led_to--> problem
+// Auto: problem becomes focus AND active_problem
+
+[add_thought: "Checking logs..."]
+// Auto: problem --spawned--> thought
+
+[add_fix: "Missing dependency"]
+// Auto: problem --fixed_by--> fix (uses active_problem)
+// Auto: thought --spawned--> fix
+// Auto: clears active_problem
+```
+
+## Key Behaviors
+
+1. **Search first** - Always `search_knowledge` before starting work
+2. **Capture reasoning** - Create `thought` nodes as you analyze (auto-links!)
+3. **Capture constraints immediately** - When user states a preference, record it (auto-collected!)
+4. **Let the system link** - Auto-linking handles most cases; use `link_nodes` only for special relationships
+5. **Document problems** - Create `problem` and `fix` nodes when debugging (auto-linked!)
+6. **Decisions auto-gather constraints** - Just call `record_decision` and constraints link automatically
+
+## Manager Mode
+
+When user says "manager mode", "start session", or "init session":
+
+1. Call `initialize_session` immediately
+2. Show summary of recent context
+3. Show any open problems
+4. Suggest focus areas based on reasoning chains
 
 ## Context Management
 
-**Claude should intelligently infer and manage project context:**
-
-### 1. Detect Project from Conversation
-- "Good morning, robotics project" → `set_context(project="robotics")`
-- "Let's work on linux setup" → `set_context(project="linux-setup")`
-- Call `get_context()` to check current, `set_context()` to update
-
-### 2. Before Creating New Projects, ASK
-- "Project 'robotics' doesn't exist. Should I create it?"
-- Only create with `create_project()` after user confirms
-
-### 3. When Working on a Task
-- Call `set_context(task_id=...)` to mark it active
-- New problems/subtasks automatically link to active task via `use_context=true`
-
-### 4. Use Signals to Infer Context
-- Working directory (cwd)
-- User mentions ("robotics", "linux", project names)
-- Recent tasks/decisions in the graph
-- Explicit statements ("switch to X project")
-
-### 5. When Context is Unclear, ASK
-- "Should this task go under 'robotics' or somewhere else?"
-
-### Context Flow Example
-
-```
-User: "Good morning, let's work on robotics"
-Claude: [calls get_context() → no context]
-        [calls list_projects() → sees if "robotics" exists]
-        If not: "Project 'robotics' doesn't exist. Create it?"
-        After confirm: [calls create_project(name="robotics")]
-                      [calls set_context(project="robotics")]
-
-User: "Add a task to build the arm controller"
-Claude: [calls add_task(subject="Build arm controller")]
-        → auto-links to robotics via use_context=true
-
-User: "Let's work on that task"
-Claude: [calls set_context(task_id=<arm controller>)]
-
-User: "The servo is jittering, need to fix that"
-Claude: [calls add_task(subject="Fix servo jitter")]
-        → becomes subtask of arm controller automatically
-
-User: "Quick detour - need to fix my wifi on linux"
-Claude: "This seems like a different project. Add to 'linux-setup' or create new?"
-        After confirm: [calls set_context(project="linux-setup")]
-                      [calls add_task(...)]
-```
-
-## Context Tools
-
-| Tool | When to Use |
-|------|-------------|
-| `get_context` | Check current active project/task |
-| `set_context` | Set active project and/or task |
-| `create_project` | Create a new project (ask first!) |
-| `list_projects` | See all available projects |
-| `get_task_tree` | View hierarchical task structure |
+Same as before - use `set_context`, `get_context`, `create_project`, etc. to manage which project you're working in. Tasks and other nodes will auto-link to the active context.
 
 ## Project Structure
 
