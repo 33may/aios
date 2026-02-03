@@ -18,6 +18,7 @@ from .scheduler import AgentScheduler
 from .linker import LinkerAgent
 from .researcher import ResearcherAgent
 from .session_reviewer import SessionReviewer
+from .curator import run_curator
 
 __all__ = [
     "BaseAgent",
@@ -26,4 +27,5 @@ __all__ = [
     "LinkerAgent",
     "ResearcherAgent",
     "SessionReviewer",
+    "run_curator",
 ]

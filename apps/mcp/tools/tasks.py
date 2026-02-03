@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import logging
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.embedder import embed_text
 from apps.backend.integrations.graphiti.models import Node, Edge
 from apps.backend.integrations.graphiti.queries import query_temporal_nodes
 
@@ -223,9 +224,11 @@ async def add_task(
     depth = _calculate_depth(client, effective_parent_id, effective_project_id)
 
     # Create the task node
+    task_content = f"{subject}\n\n{description}"
     node = Node(
         type="task",
-        content=f"{subject}\n\n{description}",
+        content=task_content,
+        embedding=embed_text(task_content),
         metadata={
             "subject": subject,
             "description": description,
@@ -376,6 +379,59 @@ async def update_task(
         "depth": node.metadata.get("depth"),
         "updated_at": node.updated_at.isoformat(),
         "success": True,
+    }
+
+
+async def change_task_status(
+    client: GraphitiClient,
+    task_id: str,
+    status: str,
+) -> Dict[str, Any]:
+    """
+    Change the status of a task. Simple focused tool for status updates.
+
+    Args:
+        client: The GraphitiClient instance
+        task_id: The ID of the task to update
+        status: New status (pending, in_progress, completed, blocked)
+
+    Returns:
+        Dictionary with success status and updated task info
+    """
+    logger.info(f"change_task_status: task_id={task_id}, status={status}")
+
+    # Get the existing task
+    node = client.get_node(task_id)
+    if not node:
+        return {
+            "success": False,
+            "error": f"Task not found: {task_id}",
+        }
+
+    if node.type != "task":
+        return {
+            "success": False,
+            "error": f"Node is not a task: {task_id} (type={node.type})",
+        }
+
+    # Get old status for response
+    old_status = node.metadata.get("status", "pending") if node.metadata else "pending"
+
+    # Update status
+    if node.metadata is None:
+        node.metadata = {}
+    node.metadata["status"] = status
+    node.updated_at = datetime.utcnow()
+
+    logger.info(f"Changed task status: {task_id} from {old_status} to {status}")
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "subject": node.metadata.get("subject", ""),
+        "old_status": old_status,
+        "new_status": status,
+        "updated_at": node.updated_at.isoformat(),
     }
 
 

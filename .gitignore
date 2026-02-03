@@ -8,3 +8,8 @@
 .worktrees/
 .security-key
 logs/security/
+
+# Environment and caches
+.env
+__pycache__/
+logs/

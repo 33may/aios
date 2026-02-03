@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.embedder import embed_text
 from apps.backend.integrations.graphiti.models import Node, Edge
 from apps.backend.integrations.graphiti.queries import query_temporal
 from apps.mcp.tools.context import (
@@ -116,6 +117,7 @@ async def add_discovery(
     node = Node(
         type="discovery",
         content=content,
+        embedding=embed_text(content),
         metadata={
             "context": context,
             "tags": tags or [],
@@ -203,6 +205,7 @@ async def add_thought(
     node = Node(
         type="thought",
         content=content,
+        embedding=embed_text(content),
         metadata={
             "context": context,
             "tags": tags or [],
@@ -289,6 +292,7 @@ async def add_problem(
     node = Node(
         type="problem",
         content=content,
+        embedding=embed_text(content),
         metadata={
             "context": context,
             "severity": severity,
@@ -379,6 +383,7 @@ async def add_fix(
     node = Node(
         type="fix",
         content=content,
+        embedding=embed_text(content),
         metadata={
             "context": context,
             "problem_id": problem_id,

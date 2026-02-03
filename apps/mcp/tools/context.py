@@ -13,6 +13,7 @@ from datetime import datetime
 import logging
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.embedder import embed_text
 from apps.backend.integrations.graphiti.models import Node, Edge
 
 logger = logging.getLogger(__name__)
@@ -367,9 +368,11 @@ async def create_project(
             }
 
     # Create the project node
+    project_content = f"{name}\n\n{description}" if description else name
     project_node = Node(
         type=PROJECT_NODE_TYPE,
-        content=f"{name}\n\n{description}" if description else name,
+        content=project_content,
+        embedding=embed_text(project_content),
         metadata={
             "name": name,
             "description": description,
@@ -485,6 +488,7 @@ async def add_constraint(
     node = Node(
         type="constraint",
         content=content,
+        embedding=embed_text(content),
         metadata={
             "source": source or "user",
             "priority": priority,

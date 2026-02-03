@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "knowledge": {
-      "command": "/home/may/miniconda3/envs/management_agent/bin/python",
+      "command": "/home/may33/miniconda3/envs/aios/bin/python",
       "args": ["-m", "apps.mcp.knowledge_server"],
-      "cwd": "/home/may/projects/management_agent"
+      "cwd": "/home/may33/projects/aios"
     }
   }
 }

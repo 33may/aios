@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import logging
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.embedder import embed_text
 from apps.backend.integrations.graphiti.models import Node, Edge
 from apps.backend.integrations.graphiti.queries import query_temporal_nodes
 from apps.mcp.tools.context import (
@@ -118,9 +119,11 @@ async def record_decision(
     logger.info(f"record_decision: title='{title}'")
 
     # Create the decision node
+    decision_content = f"{title}\n\n{rationale}"
     node = Node(
         type="decision",
-        content=f"{title}\n\n{rationale}",
+        content=decision_content,
+        embedding=embed_text(decision_content),
         metadata={
             "title": title,
             "rationale": rationale,

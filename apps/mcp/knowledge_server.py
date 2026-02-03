@@ -36,9 +36,10 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from apps.backend.integrations.graphiti.client import GraphitiClient
+from apps.backend.integrations.graphiti.embedding_backfill import ensure_embeddings_on_startup
 from apps.mcp.tools.search import search_knowledge, get_project_context
 from apps.mcp.tools.decisions import get_decisions, record_decision
-from apps.mcp.tools.tasks import get_tasks, add_task, update_task, delete_task
+from apps.mcp.tools.tasks import get_tasks, add_task, update_task, delete_task, change_task_status
 from apps.mcp.tools.activity import get_recent_activity, add_discovery, add_thought, add_problem, add_fix
 from apps.mcp.tools.traversal import traverse_related, link_nodes
 from apps.mcp.tools.session import initialize_session
@@ -53,6 +54,7 @@ from apps.mcp.tools.context import (
     clear_focus,
     get_reasoning_context,
 )
+from apps.mcp.tools.nodes import delete_node, move_node
 
 # Configure logging
 logging.basicConfig(
@@ -315,6 +317,62 @@ TOOLS = [
                 },
             },
             "required": ["task_id"],
+        },
+    ),
+    Tool(
+        name="delete_node",
+        description="Delete any node from the knowledge graph (project, task, thought, decision, discovery, etc.). Use recursive=true to delete all child nodes (following CONTAINS edges). Use with caution - this permanently removes nodes.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "string",
+                    "description": "The ID of the node to delete",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "If true, delete all child nodes recursively (following CONTAINS edges). Default: false",
+                    "default": False,
+                },
+            },
+            "required": ["node_id"],
+        },
+    ),
+    Tool(
+        name="change_task_status",
+        description="Change the status of a task. Simple focused tool for quick status updates.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The ID of the task to update",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "New status for the task",
+                    "enum": ["pending", "in_progress", "completed", "blocked"],
+                },
+            },
+            "required": ["task_id", "status"],
+        },
+    ),
+    Tool(
+        name="move_node",
+        description="Move any node under a different parent. Works on tasks, thoughts, decisions, discoveries, etc. Updates CONTAINS edges and inherits project_id from new parent.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "node_id": {
+                    "type": "string",
+                    "description": "The ID of the node to move",
+                },
+                "new_parent_id": {
+                    "type": "string",
+                    "description": "The ID of the new parent node (project, task, etc.)",
+                },
+            },
+            "required": ["node_id", "new_parent_id"],
         },
     ),
     Tool(
@@ -802,6 +860,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 delete_subtasks=arguments.get("delete_subtasks", False),
             )
 
+        elif name == "delete_node":
+            result = await delete_node(
+                client=client,
+                node_id=arguments["node_id"],
+                recursive=arguments.get("recursive", False),
+            )
+
+        elif name == "change_task_status":
+            result = await change_task_status(
+                client=client,
+                task_id=arguments["task_id"],
+                status=arguments["status"],
+            )
+
+        elif name == "move_node":
+            result = await move_node(
+                client=client,
+                node_id=arguments["node_id"],
+                new_parent_id=arguments["new_parent_id"],
+            )
+
         elif name == "add_discovery":
             result = await add_discovery(
                 client=client,
@@ -958,7 +1037,19 @@ async def main():
     logger.info("Starting Knowledge Graph MCP Server")
 
     # Initialize client on startup
-    get_client()
+    client = get_client()
+
+    # Check and backfill embeddings for existing nodes
+    logger.info("Checking embeddings for existing nodes...")
+    startup_result = ensure_embeddings_on_startup(client)
+    if startup_result.get("ollama_available"):
+        backfill_stats = startup_result.get("backfill_stats", {})
+        if backfill_stats.get("nodes_processed", 0) > 0:
+            logger.info(f"Backfilled embeddings for {backfill_stats['nodes_processed']} nodes")
+        else:
+            logger.info("All nodes have embeddings")
+    else:
+        logger.warning("Ollama not available - semantic search will be limited")
 
     async with stdio_server() as (read_stream, write_stream):
         await app.run(

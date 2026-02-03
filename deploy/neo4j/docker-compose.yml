@@ -1,6 +1,6 @@
 services:
   neo4j:
-    image: neo4j:5-community
+    image: docker.io/library/neo4j:5-community
     container_name: knowledge-neo4j
     ports:
       - "7474:7474"  # Browser UI
@@ -14,7 +14,7 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
-      - ./init.cypher:/var/lib/neo4j/import/init.cypher
+      - ./init.cypher:/var/lib/neo4j/import/init.cypher:z
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "devpassword", "RETURN 1"]
       interval: 10s
@@ -22,6 +22,30 @@ services:
       retries: 5
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: knowledge-ollama
+    ports:
+      - "11434:11434"  # Ollama API
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   neo4j_data:
   neo4j_logs:
+  ollama_data:

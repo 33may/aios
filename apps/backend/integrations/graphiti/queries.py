@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 from .client import GraphitiClient
+from .embedder import embed_text
 from .models import Node, Edge
 from .schema import (
     METADATA_SOURCE_FILE,
@@ -58,34 +59,21 @@ def _compute_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 
 def _generate_query_embedding(query: str) -> List[float]:
     """
-    Generate an embedding vector for a query string.
-
-    This is a placeholder implementation that creates a simple embedding
-    based on the query text. In production, this would call an actual
-    embedding service (e.g., OpenAI embeddings, sentence-transformers).
+    Generate an embedding vector for a query string using Ollama.
 
     Args:
         query: The query text to embed
 
     Returns:
-        A vector embedding of the query
+        A vector embedding of the query, or empty list if embedding fails
     """
-    # Simple placeholder: create a deterministic embedding based on query characteristics
-    # In production, replace with actual embedding API call
-    query_lower = query.lower()
-    embedding = [
-        float(len(query)),  # Length
-        float(sum(ord(c) for c in query_lower[:10]) % 100) / 100,  # Character sum
-        float(query_lower.count(' ')) / 10,  # Word count estimate
-        float(query_lower.count('test')) * 10,  # Test keyword
-        float(query_lower.count('project')) * 10,  # Project keyword
-    ]
-
-    # Normalize the embedding
-    magnitude = math.sqrt(sum(x * x for x in embedding))
-    if magnitude > 0:
-        embedding = [x / magnitude for x in embedding]
-
+    embedding = embed_text(query)
+    if embedding is None:
+        logger.warning(
+            f"Could not generate query embedding for '{query[:50]}...' - "
+            "search will return empty results. Ensure Ollama is running."
+        )
+        return []
     return embedding
 
 
